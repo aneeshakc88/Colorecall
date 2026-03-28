@@ -1,0 +1,5 @@
+{
+  "name": "Color Memory Game",
+  "description": "A web-based color memory game inspired by Dialed.gg where users must recreate a target color using HSL sliders.",
+  "requestFramePermissions": []
+}

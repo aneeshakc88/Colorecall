@@ -1,0 +1,79 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: scores (Solo Mode)
+    // Fields:
+    //   - name: string (required, 1-20 chars)
+    //   - score: number (required, 0-100)
+    //   - timestamp: timestamp (required)
+    //
+    // Collection: daily_scores (Daily Mode)
+    // Fields:
+    //   - sessionId: string (required)
+    //   - createdAt: timestamp (required)
+    //   - period: int (required)
+    //   - score: number (required, 0-100)
+    //   - deviceType: string (required, 'mobile', 'desktop', 'tablet')
+    //   - userId: string (required)
+    //   - userType: string (required, 'new', 'returning')
+    //
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "aneeshakc88@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidScore(data) {
+      return data.keys().hasAll(['name', 'score', 'timestamp']) &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 20 &&
+             data.score is number && data.score >= 0 && data.score <= 100 &&
+             data.timestamp is timestamp;
+    }
+
+    function isValidDailyScore(data) {
+      return data.keys().hasAll(['sessionId', 'createdAt', 'period', 'score', 'deviceType', 'userId', 'userType']) &&
+             data.sessionId is string &&
+             data.createdAt is timestamp &&
+             data.period is int &&
+             data.score is number && data.score >= 0 && data.score <= 100 &&
+             data.deviceType in ['mobile', 'desktop', 'tablet'] &&
+             data.userId is string &&
+             data.userType in ['new', 'returning'];
+    }
+
+    match /scores/{scoreId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidScore(request.resource.data) && 
+                       request.resource.data.timestamp == request.time;
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    match /daily_scores/{scoreId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidDailyScore(request.resource.data) && 
+                       request.resource.data.createdAt == request.time;
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    match /duo_daily_scores/{scoreId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidDailyScore(request.resource.data) && 
+                       request.resource.data.createdAt == request.time;
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+  }
+}

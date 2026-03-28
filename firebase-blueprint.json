@@ -1,0 +1,78 @@
+{
+  "entities": {
+    "Score": {
+      "title": "Score",
+      "description": "A solo game score entry",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Player name or initials"
+        },
+        "score": {
+          "type": "number",
+          "description": "Total score achieved"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the score was posted"
+        }
+      },
+      "required": ["name", "score", "timestamp"]
+    },
+    "DailyScore": {
+      "title": "DailyScore",
+      "description": "A daily game score entry",
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "description": "Unique session ID"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the score was created"
+        },
+        "period": {
+          "type": "integer",
+          "description": "The 18-hour cycle ID"
+        },
+        "score": {
+          "type": "number",
+          "description": "Total score achieved"
+        },
+        "deviceType": {
+          "type": "string",
+          "enum": ["mobile", "desktop", "tablet"],
+          "description": "Device used for playing"
+        },
+        "userId": {
+          "type": "string",
+          "description": "Unique user ID"
+        },
+        "userType": {
+          "type": "string",
+          "enum": ["new", "returning"],
+          "description": "Type of user"
+        }
+      },
+      "required": ["sessionId", "createdAt", "period", "score", "deviceType", "userId", "userType"]
+    }
+  },
+  "firestore": {
+    "/scores/{scoreId}": {
+      "schema": "Score",
+      "description": "Collection of solo game scores"
+    },
+    "/daily_scores/{scoreId}": {
+      "schema": "DailyScore",
+      "description": "Collection of daily game scores"
+    },
+    "/duo_daily_scores/{scoreId}": {
+      "schema": "DailyScore",
+      "description": "Collection of duo daily game scores"
+    }
+  }
+}
