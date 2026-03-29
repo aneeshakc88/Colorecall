@@ -3,8 +3,37 @@ class AudioEngine {
   private masterGain: GainNode | null = null;
   public isEnabled: boolean = true;
 
+  private unlocked: boolean = false;
+
   constructor() {
     // Initialize lazily to avoid browser autoplay policies
+    this.setupUnlock();
+  }
+
+  private setupUnlock() {
+    const unlock = () => {
+      if (this.unlocked) return;
+      this.init();
+      if (this.ctx && this.ctx.state === 'suspended') {
+        this.ctx.resume();
+      }
+      // Play a silent buffer to unlock audio on iOS
+      if (this.ctx) {
+        const buffer = this.ctx.createBuffer(1, 1, 22050);
+        const source = this.ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(this.ctx.destination);
+        source.start(0);
+      }
+      this.unlocked = true;
+      ['touchstart', 'touchend', 'mousedown', 'keydown'].forEach(e => 
+        document.removeEventListener(e, unlock)
+      );
+    };
+
+    ['touchstart', 'touchend', 'mousedown', 'keydown'].forEach(e => 
+      document.addEventListener(e, unlock, false)
+    );
   }
 
   private init() {
@@ -247,7 +276,72 @@ class AudioEngine {
       osc.start(now);
       osc.stop(now + 0.2);
     } else if (type === 'splash') {
-      // Liquid splash sound
+      // COMBINED: NATURAL WATER DROP + LEGACY SPLASH
+      
+      // 1. Legacy Splash (Oscillator + Noise)
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(100, now);
+      osc.frequency.exponentialRampToValueAtTime(600, now + 0.1);
+      osc.frequency.exponentialRampToValueAtTime(100, now + 0.3);
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(0.3, now + 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+      
+      const bufferSize = ctx.sampleRate * 0.3;
+      const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = Math.random() * 2 - 1;
+      }
+      const noise = ctx.createBufferSource();
+      noise.buffer = buffer;
+      const noiseFilter = ctx.createBiquadFilter();
+      noiseFilter.type = 'lowpass';
+      noiseFilter.frequency.value = 1000;
+      const noiseGain = ctx.createGain();
+      noiseGain.gain.setValueAtTime(0.1, now);
+      noiseGain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+      
+      noise.connect(noiseFilter);
+      noiseFilter.connect(noiseGain);
+      noiseGain.connect(this.masterGain);
+      
+      osc.connect(gain);
+      gain.connect(this.masterGain);
+      
+      osc.start(now);
+      osc.stop(now + 0.3);
+      noise.start(now);
+
+      // 2. Natural Water Drop (Droplet + Ripple)
+      const dropOsc = ctx.createOscillator();
+      const dropGain = ctx.createGain();
+      dropOsc.type = 'sine';
+      dropOsc.frequency.setValueAtTime(200, now);
+      dropOsc.frequency.exponentialRampToValueAtTime(1200, now + 0.08);
+      dropGain.gain.setValueAtTime(0, now);
+      dropGain.gain.linearRampToValueAtTime(0.8, now + 0.01);
+      dropGain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+      dropOsc.connect(dropGain);
+      dropGain.connect(this.masterGain);
+      dropOsc.start(now);
+      dropOsc.stop(now + 0.1);
+
+      const rippleOsc = ctx.createOscillator();
+      const rippleGain = ctx.createGain();
+      rippleOsc.type = 'sine';
+      rippleOsc.frequency.setValueAtTime(600, now + 0.08);
+      rippleOsc.frequency.exponentialRampToValueAtTime(1500, now + 0.15);
+      rippleGain.gain.setValueAtTime(0, now + 0.08);
+      rippleGain.gain.linearRampToValueAtTime(0.3, now + 0.09);
+      rippleGain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+      rippleOsc.connect(rippleGain);
+      rippleGain.connect(this.masterGain);
+      rippleOsc.start(now + 0.08);
+      rippleOsc.stop(now + 0.15);
+      
+    } else if (type === 'splash_old' as any) {
+      // Legacy Liquid splash sound (saved just in case)
       osc.type = 'sine';
       osc.frequency.setValueAtTime(100, now);
       osc.frequency.exponentialRampToValueAtTime(600, now + 0.1);

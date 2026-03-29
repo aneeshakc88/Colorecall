@@ -30,20 +30,20 @@ class ErrorBoundary extends React.Component<Props, State> {
   public render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen bg-white flex items-center justify-center p-6 text-center">
+        <div className="min-h-screen bg-black flex items-center justify-center p-6 text-center">
           <div className="max-w-md">
-            <h1 className="text-3xl font-bold text-black mb-4">Something went wrong.</h1>
-            <p className="text-zinc-600 mb-8">
+            <h1 className="text-3xl font-bold text-white mb-4">Something went wrong.</h1>
+            <p className="text-zinc-400 mb-8">
               We encountered an unexpected error. Please try refreshing the page.
             </p>
             <button
               onClick={() => window.location.reload()}
-              className="px-8 py-3 bg-black text-white rounded-xl font-bold hover:scale-[1.05] active:scale-[0.95] transition-all"
+              className="px-8 py-4 bg-white text-black rounded-2xl font-bold hover:scale-[1.05] active:scale-[0.95] transition-all"
             >
               Refresh Page
             </button>
             {process.env.NODE_ENV === 'development' && (
-              <pre className="mt-8 p-4 bg-zinc-100 rounded-lg text-left text-xs overflow-auto max-h-40">
+              <pre className="mt-8 p-4 bg-zinc-900 rounded-lg text-left text-xs overflow-auto max-h-40 text-red-400">
                 {this.state.error?.toString()}
               </pre>
             )}

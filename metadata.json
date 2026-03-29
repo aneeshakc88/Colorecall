@@ -1,5 +1,5 @@
 {
-  "name": "Color Memory Game",
-  "description": "A web-based color memory game inspired by Dialed.gg where users must recreate a target color using HSL sliders.",
+  "name": "Colorecall",
+  "description": "Colorecall is the ultimate color memory challenge. Test your eye for detail and match colors with dialed.gg precision.",
   "requestFramePermissions": []
 }
