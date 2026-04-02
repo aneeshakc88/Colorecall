@@ -927,7 +927,7 @@ export default function App() {
   const UserIcon = userObject;
 
   return (
-    <div className="min-h-screen w-full flex flex-col bg-white text-zinc-900 font-sans overflow-y-auto relative selection:bg-black selection:text-white">
+    <div className="min-h-screen w-full flex flex-col bg-white text-zinc-900 font-sans overflow-y-auto relative selection:bg-black selection:text-white select-none">
       
       {/* Global Volume Toggle */}
       <button 
@@ -936,6 +936,18 @@ export default function App() {
         aria-label={soundEnabled ? "Mute sound" : "Enable sound"}
       >
         {soundEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}
+      </button>
+
+      {/* Colorecall Logo */}
+      <button 
+        onClick={() => {
+          audio.playTransition('splash');
+          setSplashTrigger(prev => prev + 1);
+          setGameState('start');
+        }}
+        className="fixed top-6 left-6 z-50 hidden lg:block text-2xl font-bold tracking-tighter hover:opacity-80 transition-opacity cursor-pointer"
+      >
+        Colorecall
       </button>
 
       {/* Main Content Area */}
@@ -1019,12 +1031,13 @@ export default function App() {
                               transition={{ delay: 0.2, duration: 0.8 }}
                               className="w-full text-left"
                             >
-                              <h1 className="text-6xl sm:text-7xl md:text-8xl font-bold tracking-tighter mb-16 sm:mb-10 leading-[0.8] text-white">
+                              <h1 className="text-6xl sm:text-7xl md:text-8xl font-bold tracking-tighter mb-16 sm:mb-10 leading-[0.8] text-white flex items-baseline gap-2 whitespace-nowrap">
                                 DUO
+                                <span className="hidden">Color Memory Game</span>
                               </h1>
-                              <div className="text-white/80 text-xl sm:text-xl md:text-2xl leading-relaxed font-normal flex flex-col justify-start gap-6">
+                              <div className="text-white/80 text-lg sm:text-lg md:text-xl leading-relaxed font-normal flex flex-col justify-start gap-4">
                                 <p>Two shapes, two colors. Can you isolate the memory?</p>
-                                <p>Lock in the duo: you have 5 seconds to anchor two colors to their shapes. We'll bring back one shape, see if you can recreate its original color.</p>
+                                <p>You have 5 seconds to anchor two colors to their shapes. We'll bring back one shape, see if you can recreate its original color.</p>
                               </div>
                             </motion.div>
                             
@@ -1156,10 +1169,11 @@ export default function App() {
                             >
                               <h1 className="text-6xl sm:text-7xl md:text-8xl font-bold tracking-tighter mb-16 sm:mb-10 leading-[0.8] text-black">
                                 recall
+                                <span className="hidden">Color Memory Game</span>
                               </h1>
-                              <div className="text-zinc-500 text-xl sm:text-xl md:text-2xl leading-relaxed font-medium flex flex-col justify-start gap-6">
+                              <div className="text-zinc-500 text-lg sm:text-lg md:text-xl leading-relaxed font-medium flex flex-col justify-start gap-4">
                                 <p>Recalling a specific color is hard. Recalling a specific color AND shape together is a true test of visual memory.</p>
-                                <p className="text-zinc-400 text-lg sm:text-lg md:text-xl">We'll show you <strong className="text-black">four colored shapes</strong> - see if you can recreate these four shapes and colors.</p>
+                                <p className="text-zinc-400 text-base sm:text-base md:text-lg">We'll show you <strong className="text-black">four colored shapes</strong> - see if you can recreate these four shapes and colors.</p>
                               </div>
                             </motion.div>
                             <motion.div 
