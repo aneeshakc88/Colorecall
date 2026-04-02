@@ -126,7 +126,7 @@ class AudioEngine {
   }
 
   // Soft, low-pitched pop for color sliders
-  public playColorSliderTick(type: 'H' | 'S' | 'L') {
+  public playColorSliderTick(type: 'H' | 'S' | 'B') {
     if (!this.isEnabled) return;
     this.init();
     if (!this.ctx || !this.masterGain) return;
@@ -137,7 +137,7 @@ class AudioEngine {
     osc.type = 'sine';
     let freq = 300;
     if (type === 'S') freq = 400;
-    if (type === 'L') freq = 500;
+    if (type === 'B') freq = 500;
 
     osc.frequency.setValueAtTime(freq, this.ctx.currentTime);
     osc.frequency.exponentialRampToValueAtTime(freq / 2, this.ctx.currentTime + 0.03);

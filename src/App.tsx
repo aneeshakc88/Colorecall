@@ -1,4 +1,3 @@
-import convert from 'color-convert';
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ArrowRight, Share2, Trophy, User, Calendar, Send, Volume2, VolumeX, RefreshCw } from 'lucide-react';
@@ -7,7 +6,7 @@ import { db } from './firebase';
 import { getDynamicFeedback } from './utils';
 import { audio } from './utils/audio';
 import { initGA, trackPageView, trackButtonClick, trackGameStart, trackGameEnd } from './analytics';
-import { collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp, where } from 'firebase/firestore';
+import { collection, addDoc, query, orderBy, limit, getDocs, serverTimestamp, where, Timestamp, updateDoc, doc } from 'firebase/firestore';
 import { signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, User as FirebaseUser } from 'firebase/auth';
 import { auth } from './firebase';
 
@@ -62,7 +61,7 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   throw new Error(JSON.stringify(errInfo));
 }
 
-type Color = { h: number; s: number; l: number };
+type Color = { h: number; s: number; b: number };
 type GameState = 'start' | 'ready' | 'memorize' | 'recreate' | 'result' | 'final';
 
 type RoundData = {
@@ -106,7 +105,7 @@ const poolRandom = mulberry32(42);
 const generateSeededColor = (rng: () => number): Color => ({
   h: Math.floor(rng() * 360),
   s: 20 + Math.floor(rng() * 81),
-  l: 20 + Math.floor(rng() * 61)
+  b: 20 + Math.floor(rng() * 61)
 });
 
 const DAILY_POOL = Array.from({ length: 2000 }, () => {
@@ -126,16 +125,6 @@ const DAILY_POOL = Array.from({ length: 2000 }, () => {
     options: optionsArray
   };
 });
-
-const hslToRgb = (h: number, s: number, l: number): [number, number, number] => {
-  s /= 100;
-  l /= 100;
-  const k = (n: number) => (n + h / 30) % 12;
-  const a = s * Math.min(l, 1 - l);
-  const f = (n: number) =>
-    l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
-  return [255 * f(0), 255 * f(8), 255 * f(4)];
-};
 
 const hsbToRgb = (h: number, s: number, b: number): [number, number, number] => {
   s /= 100; b /= 100;
@@ -162,14 +151,19 @@ const rgbToLab = (r: number, g: number, b: number): [number, number, number] => 
   return [116 * f(y) - 16, 500 * (f(x) - f(y)), 200 * (f(y) - f(z))];
 };
 
-const calculateScore = (target: Color, user: Color, targetObj: React.ElementType, userObj: React.ElementType, mode: 'daily' | 'solo' | 'duo'): number => {
-  // dialed.gg uses HSB (Hue, Saturation, Brightness). 
-  // Our app uses HSL. We convert HSL to HSB (HSV) to use dialed.gg's exact formula.
-  const targetHsb = convert.hsl.hsv([target.h, target.s, target.l]);
-  const userHsb = convert.hsl.hsv([user.h, user.s, user.l]);
+const getAnalyticsModeName = (mode: string) => {
+  switch(mode) {
+    case 'daily': return 'Classic - Daily';
+    case 'solo': return 'Classic - QuickPlay';
+    case 'duo': return 'Duo - Daily';
+    case 'duo-quickplay': return 'Duo - QuickPlay';
+    default: return mode;
+  }
+};
 
-  const [r1, g1, bl1] = hsbToRgb(targetHsb[0], targetHsb[1], targetHsb[2]);
-  const [r2, g2, bl2] = hsbToRgb(userHsb[0], userHsb[1], userHsb[2]);
+const calculateScore = (target: Color, user: Color, targetObj: React.ElementType, userObj: React.ElementType, mode: 'daily' | 'solo' | 'duo' | 'duo-quickplay'): number => {
+  const [r1, g1, bl1] = hsbToRgb(target.h, target.s, target.b);
+  const [r2, g2, bl2] = hsbToRgb(user.h, user.s, user.b);
   const [L1, a1, b1L] = rgbToLab(r1, g1, bl1);
   const [L2, a2, b2L] = rgbToLab(r2, g2, bl2);
 
@@ -180,8 +174,8 @@ const calculateScore = (target: Color, user: Color, targetObj: React.ElementType
   const base = 10 / (1 + Math.pow(dE / 32, 1.6));
 
   // Hue-aware adjustments
-  const hueDiff = Math.min(Math.abs(targetHsb[0] - userHsb[0]), 360 - Math.abs(targetHsb[0] - userHsb[0]));
-  const avgSat = (targetHsb[1] + userHsb[1]) / 2;
+  const hueDiff = Math.min(Math.abs(target.h - user.h), 360 - Math.abs(target.h - user.h));
+  const avgSat = (target.s + user.s) / 2;
 
   // Recovery: if hue is within ~25°, recover up to 40% of lost points.
   const hueAcc = Math.max(0, 1 - Math.pow(hueDiff / 25, 1.5));
@@ -199,7 +193,7 @@ const calculateScore = (target: Color, user: Color, targetObj: React.ElementType
 
   // Scale dialed.gg's 10-point score to our 25-point system
   let totalScore = 0;
-  if (mode === 'duo') {
+  if (mode.startsWith('duo')) {
     totalScore = 2.5 * dialedScore;
   } else {
     // 80% for color (max 20), 20% for shape (max 5)
@@ -220,7 +214,10 @@ const getScoreText = (score: number) => {
   return "That's not it.";
 };
 
-const hslToString = (c: Color, alpha: number = 1) => `hsl(${c.h}, ${c.s}%, ${c.l}%, ${alpha})`;
+const hsbToString = (c: Color, alpha: number = 1) => {
+  const [r, g, b] = hsbToRgb(c.h, c.s, c.b);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
 
 const STATIC_LEADERBOARD = (() => {
   const parts = ["VS", "Int", "Xy", "Qo", "Pl", "Tr", "Mn", "Bk", "Jz", "Wq", "Vn", "Cr", "Op", "Am", "Jd", "Rb", "Sp", "Tp", "Br", "On"];
@@ -279,7 +276,7 @@ const AnimatedScore = ({ value, onComplete }: { value: number, onComplete?: () =
 const VerticalSlider = ({ 
   value, max, onChange, bg, type 
 }: { 
-  value: number, max: number, onChange: (v: number) => void, bg: string, type: 'H' | 'S' | 'L' 
+  value: number, max: number, onChange: (v: number) => void, bg: string, type: 'H' | 'S' | 'B' 
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const lastSoundTime = useRef<number>(0);
@@ -293,7 +290,7 @@ const VerticalSlider = ({
     const rect = containerRef.current.getBoundingClientRect();
     let y = e.clientY - rect.top;
     y = Math.max(16, Math.min(y, rect.height - 16));
-    const percentage = 1 - ((y - 16) / (rect.height - 32));
+    const percentage = type === 'H' ? ((y - 16) / (rect.height - 32)) : 1 - ((y - 16) / (rect.height - 32));
     const newValue = Math.round(percentage * max);
     
     if (newValue !== value) {
@@ -320,7 +317,7 @@ const VerticalSlider = ({
       {/* Glowing Indicator Thumb */}
       <div 
         className="absolute left-1/2 w-4 h-4 sm:w-5 sm:h-5 md:w-6 md:h-6 -translate-x-1/2 -translate-y-1/2 bg-white rounded-full shadow-lg pointer-events-none z-10 border border-zinc-200"
-        style={{ top: `calc(16px + ${(1 - value / max)} * (100% - 32px))` }}
+        style={{ top: `calc(16px + ${(type === 'H' ? value / max : 1 - value / max)} * (100% - 32px))` }}
       />
     </div>
   );
@@ -402,11 +399,11 @@ const SplashParticles = ({ triggerKey }: { triggerKey: number }) => {
 
 export default function App() {
   const [gameState, setGameState] = useState<GameState>('start');
-  const [gameMode, setGameMode] = useState<'daily' | 'solo' | 'duo'>('daily');
+  const [gameMode, setGameMode] = useState<'daily' | 'solo' | 'duo' | 'duo-quickplay'>('daily');
   const [round, setRound] = useState(1);
-  const [targetColor, setTargetColor] = useState<Color>({ h: 0, s: 0, l: 0 });
-  const [distractorColor, setDistractorColor] = useState<Color>({ h: 0, s: 0, l: 0 });
-  const [userColor, setUserColor] = useState<Color>({ h: 180, s: 50, l: 50 });
+  const [targetColor, setTargetColor] = useState<Color>({ h: 0, s: 0, b: 0 });
+  const [distractorColor, setDistractorColor] = useState<Color>({ h: 0, s: 0, b: 0 });
+  const [userColor, setUserColor] = useState<Color>({ h: 180, s: 50, b: 100 });
   const [score, setScore] = useState(0);
   const [totalScore, setTotalScore] = useState(0);
   const [roundData, setRoundData] = useState<RoundData[]>([]);
@@ -419,11 +416,22 @@ export default function App() {
   const [hasPlayedDuoToday, setHasPlayedDuoToday] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showScoreboard, setShowScoreboard] = useState(false);
+  const [leaderboardTab, setLeaderboardTab] = useState<'daily' | 'quickplay'>('daily');
   const [showScoreText, setShowScoreText] = useState(false);
   const [currentOptions, setCurrentOptions] = useState<number[]>([]);
   const [playerName, setPlayerName] = useState(() => localStorage.getItem('mastery_player_name') || '');
   const [isPosting, setIsPosting] = useState(false);
   const [isHoveringDaily, setIsHoveringDaily] = useState(false);
+
+  const getCollectionName = (mode: string) => {
+    switch (mode) {
+      case 'daily': return 'classic_daily_scores';
+      case 'solo': return 'classic_quickplay_scores';
+      case 'duo': return 'duo_daily_scores';
+      case 'duo-quickplay': return 'duo_quickplay_scores';
+      default: return 'classic_daily_scores';
+    }
+  };
   const [isHoveringQuickPlay, setIsHoveringQuickPlay] = useState(false);
   const [isHoveringDuo, setIsHoveringDuo] = useState(false);
   const [isHoveringScore, setIsHoveringScore] = useState(false);
@@ -438,6 +446,7 @@ export default function App() {
   const [duoStats, setDuoStats] = useState<{ high: number; avg: number } | null>(null);
   const [nextDailyCountdown, setNextDailyCountdown] = useState("");
   const [currentSessionId, setCurrentSessionId] = useState("");
+  const [currentScoreDocId, setCurrentScoreDocId] = useState<string | null>(null);
   const [cycleOffset, setCycleOffset] = useState(0);
   const [soundEnabled, setSoundEnabled] = useState(audio.isEnabled);
 
@@ -462,7 +471,7 @@ export default function App() {
     try {
       const currentCycle = getEffectiveCycle();
       const q = query(
-        collection(db, 'daily_scores'), 
+        collection(db, 'classic_daily_scores'), 
         where('period', '==', currentCycle)
       );
       const querySnapshot = await getDocs(q);
@@ -476,7 +485,7 @@ export default function App() {
         setDailyStats(null);
       }
     } catch (error) {
-      handleFirestoreError(error, OperationType.GET, 'daily_scores');
+      handleFirestoreError(error, OperationType.GET, 'classic_daily_scores');
     }
   };
 
@@ -539,32 +548,35 @@ export default function App() {
 
   const fetchScores = async () => {
     try {
-      // Filter by the current game edition (duo or classic/solo)
-      const currentMode = gameEdition === 'duo' ? 'duo' : 'solo';
+      const mode = leaderboardTab === 'daily' ? (gameEdition === 'duo' ? 'duo' : 'daily') : (gameEdition === 'duo' ? 'duo-quickplay' : 'solo');
+      const collectionName = getCollectionName(mode);
       const q = query(
-        collection(db, 'scores'), 
-        where('mode', '==', currentMode),
+        collection(db, collectionName), 
+        where('isPosted', '==', true),
         orderBy('score', 'desc'), 
         limit(50)
       );
       const querySnapshot = await getDocs(q);
       const liveScores = querySnapshot.docs.map(doc => ({
-        name: doc.data().name,
+        name: doc.data().name || 'Anonymous',
         score: doc.data().score,
         mode: doc.data().mode
       }));
       
       // Get total count for the current mode
-      const countQuery = query(collection(db, 'scores'), where('mode', '==', currentMode));
+      const countQuery = query(collection(db, collectionName), where('isPosted', '==', true));
       const countSnapshot = await getDocs(countQuery);
-      setTotalPlayers(countSnapshot.size);
       
       // Only include static scores if in classic mode, or if they are relevant
-      const staticScores = gameEdition === 'classic' ? STATIC_LEADERBOARD : [];
+      const staticScores = gameEdition === 'classic' && leaderboardTab === 'daily' ? STATIC_LEADERBOARD : [];
+      setTotalPlayers(countSnapshot.size + staticScores.length);
+      
       const combined = [...liveScores, ...staticScores].sort((a, b) => b.score - a.score);
       setLeaderboard(combined);
     } catch (error) {
-      handleFirestoreError(error, OperationType.GET, 'scores');
+      const mode = leaderboardTab === 'daily' ? (gameEdition === 'duo' ? 'duo' : 'daily') : (gameEdition === 'duo' ? 'duo-quickplay' : 'solo');
+      const collectionName = getCollectionName(mode);
+      handleFirestoreError(error, OperationType.GET, collectionName);
     }
   };
 
@@ -572,39 +584,56 @@ export default function App() {
     if (showScoreboard) {
       fetchScores();
     }
-  }, [showScoreboard, gameEdition]);
+  }, [showScoreboard, gameEdition, leaderboardTab]);
 
-  const autoPostDailyScore = async (finalTotal: number) => {
+  const postGameHistory = async (finalTotal: number, finalRoundData: RoundData[]) => {
+    console.log("Attempting to post game history...", { finalTotal, gameMode });
     try {
-      await addDoc(collection(db, 'daily_scores'), {
+      const isDuo = gameMode === 'duo' || gameMode === 'duo-quickplay';
+      const collectionName = isDuo ? 'duo_history' : 'classic_history';
+      
+      await addDoc(collection(db, collectionName), {
         sessionId: currentSessionId || generateSessionId(),
-        createdAt: serverTimestamp(),
-        period: getEffectiveCycle(),
-        score: finalTotal,
+        timestamp: serverTimestamp(),
+        totalScore: finalTotal,
+        gameMode: gameMode,
         deviceType: getDeviceType(),
         userId: getUserId(),
-        userType: getUserType()
+        roundData: finalRoundData
       });
-      fetchDailyStats();
+      console.log("Game history posted successfully to", collectionName);
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'daily_scores');
+      console.error("Failed to post game history:", error);
+      const isDuo = gameMode === 'duo' || gameMode === 'duo-quickplay';
+      handleFirestoreError(error, OperationType.WRITE, isDuo ? 'duo_history' : 'classic_history');
     }
   };
 
-  const autoPostDuoDailyScore = async (finalTotal: number) => {
+  const autoPostScore = async (finalTotal: number, mode: 'daily' | 'solo' | 'duo' | 'duo-quickplay') => {
     try {
-      await addDoc(collection(db, 'duo_daily_scores'), {
+      const collectionName = getCollectionName(mode);
+      const isDaily = mode === 'daily' || mode === 'duo';
+      const nameToSave = isDaily ? (playerName.trim() || 'BB') : (playerName.trim() || 'Anonymous');
+      const isPosted = isDaily ? true : !!playerName.trim();
+
+      const docRef = await addDoc(collection(db, collectionName), {
         sessionId: currentSessionId || generateSessionId(),
         createdAt: serverTimestamp(),
         period: getEffectiveCycle(),
         score: finalTotal,
+        mode: mode,
         deviceType: getDeviceType(),
         userId: getUserId(),
-        userType: getUserType()
+        userType: getUserType(),
+        name: nameToSave,
+        isPosted: isPosted
       });
-      fetchDuoStats();
+      setCurrentScoreDocId(docRef.id);
+      if (mode === 'daily' || mode === 'solo') fetchDailyStats();
+      else fetchDuoStats();
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'duo_daily_scores');
+      const collectionName = getCollectionName(mode);
+      handleFirestoreError(error, OperationType.WRITE, collectionName);
     }
   };
 
@@ -613,29 +642,56 @@ export default function App() {
     trackButtonClick('PostScore');
     if (!playerName.trim() || isPosting) return;
     setIsPosting(true);
+    console.log("Attempting to post score...", { playerName, totalScore, gameMode });
     localStorage.setItem('mastery_player_name', playerName.trim());
     try {
-      await addDoc(collection(db, 'scores'), {
-        name: playerName.trim(),
-        score: totalScore,
-        mode: gameMode,
-        timestamp: serverTimestamp()
-      });
+      const collectionName = getCollectionName(gameMode);
+      
+      const q = query(
+        collection(db, collectionName),
+        where('userId', '==', getUserId())
+      );
+      const querySnapshot = await getDocs(q);
+      
+      const updatePromises = querySnapshot.docs
+        .filter(docSnapshot => docSnapshot.data().isPosted === false)
+        .map(docSnapshot => 
+          updateDoc(doc(db, collectionName, docSnapshot.id), {
+            name: playerName.trim(),
+            isPosted: true
+          })
+        );
+      
+      if (currentScoreDocId) {
+        updatePromises.push(updateDoc(doc(db, collectionName, currentScoreDocId), {
+          name: playerName.trim(),
+          isPosted: true
+        }));
+      }
+      
+      await Promise.all(updatePromises);
+      console.log("Score posted successfully to", collectionName);
+      
       setShowScoreboard(true);
       setGameState('start');
     } catch (error) {
-      handleFirestoreError(error, OperationType.WRITE, 'scores');
+      console.error("Failed to post score:", error);
+      const collectionName = getCollectionName(gameMode);
+      handleFirestoreError(error, OperationType.WRITE, collectionName);
     } finally {
       setIsPosting(false);
     }
   };
 
-  const startRound = (r: number, mode: 'daily' | 'solo' | 'duo' = gameMode) => {
+  const startRound = (r: number, mode: 'daily' | 'solo' | 'duo' | 'duo-quickplay' = gameMode) => {
     setRound(r);
     setGameMode(mode);
     
-    if (r === 1 && mode === 'daily') {
-      setCurrentSessionId(generateSessionId());
+    if (r === 1) {
+      setCurrentScoreDocId(null);
+      if (mode === 'daily') {
+        setCurrentSessionId(generateSessionId());
+      }
     }
 
     let roundInfo;
@@ -656,7 +712,7 @@ export default function App() {
         color: {
           h: Math.floor(Math.random() * 360),
           s: 20 + Math.floor(Math.random() * 81),
-          l: 20 + Math.floor(Math.random() * 61)
+          b: 20 + Math.floor(Math.random() * 61)
         },
         objectIndex: targetIndex,
         options: optionsArray
@@ -664,16 +720,16 @@ export default function App() {
     }
     
     setTargetColor(roundInfo.color);
-    setUserColor({ h: 180, s: 50, l: 50 });
+    setUserColor({ h: 180, s: 50, b: 100 });
     setTargetObject(() => OBJECTS[roundInfo.objectIndex]);
-    setUserObject(() => mode === 'duo' ? OBJECTS[roundInfo.objectIndex] : OBJECTS[roundInfo.options[0]]);
+    setUserObject(() => mode.startsWith('duo') ? OBJECTS[roundInfo.objectIndex] : OBJECTS[roundInfo.options[0]]);
     setCurrentOptions(roundInfo.options);
 
-    if (mode === 'duo') {
+    if (mode.startsWith('duo')) {
       setDistractorColor({
         h: Math.floor(Math.random() * 360),
         s: 20 + Math.floor(Math.random() * 81),
-        l: 20 + Math.floor(Math.random() * 61)
+        b: 20 + Math.floor(Math.random() * 61)
       });
       let distractorIdx = Math.floor(Math.random() * OBJECTS.length);
       while (distractorIdx === roundInfo.objectIndex) {
@@ -794,9 +850,12 @@ export default function App() {
     if (round < 4) {
       startRound(round + 1, gameMode);
     } else {
-      trackGameEnd(totalScore, gameMode);
+      trackGameEnd(totalScore, getAnalyticsModeName(gameMode));
       const finalTotal = totalScore;
       const finalRoundData = [...roundData];
+      
+      // Post detailed history for all games
+      postGameHistory(finalTotal, finalRoundData).catch(err => console.error("History post failed:", err));
       
       if (gameMode === 'daily') {
         localStorage.setItem('daily_chroma_state', JSON.stringify({
@@ -806,7 +865,7 @@ export default function App() {
           roundData: finalRoundData
         }));
         setHasPlayedToday(true);
-        autoPostDailyScore(finalTotal);
+        autoPostScore(finalTotal, 'daily');
       } else if (gameMode === 'duo') {
         localStorage.setItem('duo_daily_chroma_state', JSON.stringify({
           cycleId: getEffectiveCycle(),
@@ -815,7 +874,11 @@ export default function App() {
           roundData: finalRoundData
         }));
         setHasPlayedDuoToday(true);
-        autoPostDuoDailyScore(finalTotal);
+        autoPostScore(finalTotal, 'duo');
+      } else if (gameMode === 'solo') {
+        autoPostScore(finalTotal, 'solo');
+      } else if (gameMode === 'duo-quickplay') {
+        autoPostScore(finalTotal, 'duo-quickplay');
       }
       
       setGameState('final');
@@ -828,7 +891,7 @@ export default function App() {
     let dateStr;
     let grid = "";
     
-    if (gameMode === 'daily') {
+    if (gameMode === 'daily' || gameMode === 'duo') {
       dateStr = getDailyDateString();
       roundData.forEach(d => {
         if (d.score >= 24) grid += "🟩";
@@ -850,8 +913,11 @@ export default function App() {
       });
     }
     
-    const modeName = gameMode === 'daily' ? 'Daily' : gameMode === 'duo' ? 'Duo' : 'QuickPlay';
-    const text = `Recreate ${modeName} - ${dateStr}\nScore: ${totalScore.toFixed(2)}/100\n${grid}\nPlay at: ${window.location.origin}`;
+    const modeName = gameMode === 'daily' ? 'Classic Daily' 
+                   : gameMode === 'solo' ? 'Classic QuickPlay' 
+                   : gameMode === 'duo' ? 'Duo Daily' 
+                   : 'Duo QuickPlay';
+    const text = `${modeName} - ${dateStr}\nScore: ${totalScore.toFixed(2)}/100\n${grid}\nPlay at: https://www.colorecall.com/`;
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -897,7 +963,7 @@ export default function App() {
                         
                         {showScoreboard ? (
                           <div className="flex flex-col w-full max-w-2xl z-10 h-full">
-                            <div className="flex justify-between items-center mb-12">
+                            <div className="flex justify-between items-center mb-6">
                               <div className="flex items-center gap-3">
                                 <Trophy className="text-white" size={24} />
                                 <div className="flex flex-col">
@@ -910,6 +976,22 @@ export default function App() {
                               <button onClick={() => { audio.playClick(); setShowScoreboard(false); }} className="text-white hover:opacity-70 transition-opacity font-bold uppercase text-xs tracking-widest">
                                 Close
                               </button>
+                            </div>
+                            <div className="flex justify-center mb-6">
+                              <div className="flex bg-zinc-800/50 p-1 rounded-full">
+                                <button 
+                                  onClick={() => { audio.playClick(); setLeaderboardTab('daily'); }}
+                                  className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest transition-colors ${leaderboardTab === 'daily' ? 'bg-white text-black' : 'text-zinc-400 hover:text-white'}`}
+                                >
+                                  Daily
+                                </button>
+                                <button 
+                                  onClick={() => { audio.playClick(); setLeaderboardTab('quickplay'); }}
+                                  className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest transition-colors ${leaderboardTab === 'quickplay' ? 'bg-white text-black' : 'text-zinc-400 hover:text-white'}`}
+                                >
+                                  Quick Play
+                                </button>
+                              </div>
                             </div>
                             <div className="space-y-4 overflow-y-auto max-h-[60vh] pr-2">
                               {leaderboard.length > 0 ? leaderboard.map((entry, i) => (
@@ -938,10 +1020,9 @@ export default function App() {
                               className="w-full text-left"
                             >
                               <h1 className="text-6xl sm:text-7xl md:text-8xl font-bold tracking-tighter mb-16 sm:mb-10 leading-[0.8] text-white">
-                                Colorecall
+                                DUO
                               </h1>
                               <div className="text-white/80 text-xl sm:text-xl md:text-2xl leading-relaxed font-normal flex flex-col justify-start gap-6">
-                                <p className="text-white/40 text-xs tracking-widest uppercase font-black mb-2">Duo Edition</p>
                                 <p>Two shapes, two colors. Can you isolate the memory?</p>
                                 <p>Lock in the duo: you have 5 seconds to anchor two colors to their shapes. We'll bring back one shape, see if you can recreate its original color.</p>
                               </div>
@@ -972,7 +1053,7 @@ export default function App() {
                                       setTotalScore(0);
                                       setRoundData([]);
                                       startRound(1, 'duo');
-                                      trackGameStart('Duo');
+                                      trackGameStart('Duo - Daily');
                                     }
                                   }}
                                   className="flex-1 sm:flex-none sm:w-48 py-4 sm:py-5 bg-white text-black font-black rounded-2xl flex items-center justify-center text-lg sm:text-xl shadow-xl hover:scale-105 active:scale-95 transition-transform"
@@ -984,7 +1065,8 @@ export default function App() {
                                     audio.playClick();
                                     setTotalScore(0);
                                     setRoundData([]);
-                                    startRound(1, 'duo');
+                                    startRound(1, 'duo-quickplay');
+                                    trackGameStart('Duo - QuickPlay');
                                   }}
                                   className="flex-1 sm:flex-none sm:w-48 py-4 sm:py-5 bg-white text-black font-black rounded-2xl flex items-center justify-center text-lg sm:text-xl shadow-xl hover:scale-105 active:scale-95 transition-transform"
                                 >
@@ -1016,7 +1098,7 @@ export default function App() {
                       >
                         {showScoreboard ? (
                           <div className="flex flex-col w-full h-full">
-                            <div className="flex justify-between items-center mb-12">
+                            <div className="flex justify-between items-center mb-6">
                               <div className="flex items-center gap-3">
                                 <Trophy className="text-amber-500" size={24} />
                                 <div className="flex flex-col">
@@ -1029,6 +1111,22 @@ export default function App() {
                               <button onClick={() => { audio.playClick(); setShowScoreboard(false); }} className="text-black hover:opacity-70 transition-opacity font-bold uppercase text-xs tracking-widest">
                                 Close
                               </button>
+                            </div>
+                            <div className="flex justify-center mb-6">
+                              <div className="flex bg-zinc-100 p-1 rounded-full">
+                                <button 
+                                  onClick={() => { audio.playClick(); setLeaderboardTab('daily'); }}
+                                  className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest transition-colors ${leaderboardTab === 'daily' ? 'bg-black text-white' : 'text-zinc-500 hover:text-black'}`}
+                                >
+                                  Daily
+                                </button>
+                                <button 
+                                  onClick={() => { audio.playClick(); setLeaderboardTab('quickplay'); }}
+                                  className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest transition-colors ${leaderboardTab === 'quickplay' ? 'bg-black text-white' : 'text-zinc-500 hover:text-black'}`}
+                                >
+                                  Quick Play
+                                </button>
+                              </div>
                             </div>
                             <div className="space-y-4 overflow-y-auto max-h-[350px] pr-2">
                               {leaderboard.length > 0 ? leaderboard.map((entry, i) => (
@@ -1057,10 +1155,9 @@ export default function App() {
                               className="w-full text-left"
                             >
                               <h1 className="text-6xl sm:text-7xl md:text-8xl font-bold tracking-tighter mb-16 sm:mb-10 leading-[0.8] text-black">
-                                Colorecall
+                                recall
                               </h1>
                               <div className="text-zinc-500 text-xl sm:text-xl md:text-2xl leading-relaxed font-medium flex flex-col justify-start gap-6">
-                                <p className="text-black/20 text-xs tracking-widest uppercase font-black mb-2">Classic Edition</p>
                                 <p>Recalling a specific color is hard. Recalling a specific color AND shape together is a true test of visual memory.</p>
                                 <p className="text-zinc-400 text-lg sm:text-lg md:text-xl">We'll show you <strong className="text-black">four colored shapes</strong> - see if you can recreate these four shapes and colors.</p>
                               </div>
@@ -1087,7 +1184,7 @@ export default function App() {
                                         setGameState('final');
                                       }
                                     } else {
-                                      trackGameStart('Daily');
+                                      trackGameStart('Classic - Daily');
                                       setTotalScore(0);
                                       setRoundData([]);
                                       startRound(1, 'daily');
@@ -1104,7 +1201,7 @@ export default function App() {
                                     setTotalScore(0);
                                     setRoundData([]);
                                     startRound(1, 'solo');
-                                    trackGameStart('QuickPlay');
+                                    trackGameStart('Classic - QuickPlay');
                                   }}
                                   className="flex-1 sm:flex-none sm:w-48 py-4 sm:py-5 bg-black text-white font-black rounded-2xl flex items-center justify-center text-lg sm:text-xl shadow-xl hover:scale-105 active:scale-95 transition-transform"
                                 >
@@ -1188,14 +1285,20 @@ export default function App() {
                                            suffixes[Math.floor(Math.random() * suffixes.length)] + 
                                            Math.floor(Math.random() * 99);
                               const randomScore = Number((70 + Math.random() * 29).toFixed(2));
-                              await addDoc(collection(db, 'scores'), {
-                                name,
+                              await addDoc(collection(db, 'duo_quickplay_scores'), {
+                                sessionId: `seeded_${i}_${Date.now()}`,
+                                createdAt: serverTimestamp(),
+                                period: getEffectiveCycle(),
                                 score: randomScore,
-                                mode: 'duo',
-                                timestamp: serverTimestamp()
+                                mode: 'duo-quickplay',
+                                deviceType: 'desktop',
+                                userId: 'seeded_bot',
+                                userType: 'returning',
+                                name: name,
+                                isPosted: true
                               });
                             }
-                            alert("78 Duo scores seeded!");
+                            alert("78 Duo scores seeded to duo_quickplay_scores!");
                             fetchScores();
                           }}
                           className="text-[10px] text-zinc-500 hover:text-black font-bold uppercase tracking-[0.2em] transition-colors text-left"
@@ -1252,17 +1355,17 @@ export default function App() {
                       {countdown > 0 ? countdown : 5}
                     </div>
                     <div className={`text-xs text-zinc-400 tracking-widest mt-1 transition-opacity duration-200 ${countdown > 0 ? 'opacity-100' : 'opacity-0'}`}>
-                      {gameMode === 'duo' ? 'Seconds to observe the Shapes and Colors' : 'Seconds to observe the Shape and Color'}
+                      {gameMode.startsWith('duo') ? 'Seconds to observe the Shapes and Colors' : 'Seconds to observe the Shape and Color'}
                     </div>
                   </div>
 
-                  {gameMode === 'duo' ? (
+                  {gameMode.startsWith('duo') ? (
                     <div className="flex gap-12 md:gap-24 items-center justify-center w-full h-full">
                       <div className="w-32 h-32 md:w-48 md:h-48">
                         {duoTargetPosition === 0 ? (
                           <TargetIcon 
                             className="w-full h-full drop-shadow-[0_20px_50px_rgba(0,0,0,0.1)]"
-                            style={{ color: hslToString(targetColor) }}
+                            style={{ color: hsbToString(targetColor) }}
                           />
                         ) : (
                           (() => {
@@ -1270,7 +1373,7 @@ export default function App() {
                             return (
                               <DistractorIcon 
                                 className="w-full h-full drop-shadow-[0_20px_50px_rgba(0,0,0,0.1)]"
-                                style={{ color: hslToString(distractorColor) }}
+                                style={{ color: hsbToString(distractorColor) }}
                               />
                             );
                           })()
@@ -1280,7 +1383,7 @@ export default function App() {
                         {duoTargetPosition === 1 ? (
                           <TargetIcon 
                             className="w-full h-full drop-shadow-[0_20px_50px_rgba(0,0,0,0.1)]"
-                            style={{ color: hslToString(targetColor) }}
+                            style={{ color: hsbToString(targetColor) }}
                           />
                         ) : (
                           (() => {
@@ -1288,7 +1391,7 @@ export default function App() {
                             return (
                               <DistractorIcon 
                                 className="w-full h-full drop-shadow-[0_20px_50px_rgba(0,0,0,0.1)]"
-                                style={{ color: hslToString(distractorColor) }}
+                                style={{ color: hsbToString(distractorColor) }}
                               />
                             );
                           })()
@@ -1299,7 +1402,7 @@ export default function App() {
                     <div className="w-40 h-40 md:w-56 md:h-56">
                       <TargetIcon 
                         className="w-full h-full drop-shadow-[0_20px_50px_rgba(0,0,0,0.1)]"
-                        style={{ color: hslToString(targetColor) }}
+                        style={{ color: hsbToString(targetColor) }}
                       />
                     </div>
                   )}
@@ -1319,22 +1422,22 @@ export default function App() {
                       value={userColor.h} 
                       max={360} 
                       onChange={(v) => setUserColor(prev => ({ ...prev, h: v }))} 
-                      bg="linear-gradient(to bottom, #ff3b30 0%, #ff2d55 17%, #5856d6 33%, #007aff 50%, #34c759 67%, #ffcc00 83%, #ff3b30 100%)"
+                      bg="linear-gradient(to bottom, #ff0000 0%, #ffff00 16.67%, #00ff00 33.33%, #00ffff 50%, #0000ff 66.67%, #ff00ff 83.33%, #ff0000 100%)"
                       type="H"
                     />
                     <VerticalSlider 
                       value={userColor.s} 
                       max={100} 
                       onChange={(v) => setUserColor(prev => ({ ...prev, s: v }))} 
-                      bg={`linear-gradient(to bottom, hsl(${userColor.h}, 100%, ${userColor.l}%), hsl(${userColor.h}, 0%, ${userColor.l}%))`}
+                      bg={`linear-gradient(to bottom, ${hsbToString({h: userColor.h, s: 100, b: userColor.b})}, ${hsbToString({h: userColor.h, s: 0, b: userColor.b})})`}
                       type="S"
                     />
                     <VerticalSlider 
-                      value={userColor.l} 
+                      value={userColor.b} 
                       max={100} 
-                      onChange={(v) => setUserColor(prev => ({ ...prev, l: v }))} 
-                      bg={`linear-gradient(to bottom, #fff 0%, hsl(${userColor.h}, ${userColor.s}%, 50%) 50%, #000 100%)`}
-                      type="L"
+                      onChange={(v) => setUserColor(prev => ({ ...prev, b: v }))} 
+                      bg={`linear-gradient(to bottom, ${hsbToString({h: userColor.h, s: userColor.s, b: 100})}, ${hsbToString({h: userColor.h, s: userColor.s, b: 0})})`}
+                      type="B"
                     />
                   </div>
 
@@ -1350,12 +1453,12 @@ export default function App() {
                   <div className="flex-1 flex flex-col items-center justify-center relative">
                     {/* Match Text */}
                     <div className="absolute top-6 left-1/2 -translate-x-1/2 text-white/60 text-[8px] sm:text-[10px] tracking-[0.2em] sm:tracking-[0.3em] uppercase font-bold z-20 whitespace-nowrap">
-                      {gameMode === 'duo' ? 'Match the color' : 'Match the shape and color'}
+                      {gameMode.startsWith('duo') ? 'Match the color' : 'Match the shape and color'}
                     </div>
                     <div className="w-24 h-24 sm:w-32 sm:h-32 md:w-48 md:h-48">
                       <UserIcon 
                         className="w-full h-full transition-colors duration-200"
-                        style={{ color: hslToString(userColor) }}
+                        style={{ color: hsbToString(userColor) }}
                       />
                     </div>
                     
@@ -1372,7 +1475,7 @@ export default function App() {
                   </div>
  
                   {/* Right: Shapes */}
-                  {gameMode !== 'duo' && (
+                  {!gameMode.startsWith('duo') && (
                     <div className="w-16 flex flex-col items-center gap-4 p-4 border-l border-white/10 overflow-y-auto hide-scrollbar">
                       <div className="text-[8px] text-white/60 font-bold tracking-widest uppercase mb-2">Shape Slider</div>
                       {currentOptions.map((optionIndex, i) => {
@@ -1469,11 +1572,11 @@ export default function App() {
                       <div className="w-24 h-24 md:w-32 md:h-32 mb-6">
                         <TargetIcon 
                           className="w-full h-full drop-shadow-[0_20px_50px_rgba(0,0,0,0.1)]"
-                          style={{ color: hslToString(targetColor) }}
+                          style={{ color: hsbToString(targetColor) }}
                         />
                       </div>
                       <p className="text-[10px] tracking-[0.1em] uppercase text-zinc-500 font-bold mb-1">Original</p>
-                      <p className="text-xs md:text-sm tracking-tight text-zinc-400 font-bold">H{targetColor.h} S{targetColor.s} L{targetColor.l}</p>
+                      <p className="text-xs md:text-sm tracking-tight text-zinc-400 font-bold">H{targetColor.h} S{targetColor.s} B{targetColor.b}</p>
                     </div>
 
                     {/* User Selection */}
@@ -1481,11 +1584,11 @@ export default function App() {
                       <div className="w-24 h-24 md:w-32 md:h-32 mb-6">
                         <UserIcon 
                           className="w-full h-full drop-shadow-[0_20px_50px_rgba(0,0,0,0.1)]"
-                          style={{ color: hslToString(userColor) }}
+                          style={{ color: hsbToString(userColor) }}
                         />
                       </div>
                       <p className="text-[10px] tracking-[0.1em] uppercase text-zinc-500 font-bold mb-1">Your Selection</p>
-                      <p className="text-xs md:text-sm tracking-tight text-zinc-400 font-bold">H{userColor.h} S{userColor.s} L{userColor.l}</p>
+                      <p className="text-xs md:text-sm tracking-tight text-zinc-400 font-bold">H{userColor.h} S{userColor.s} B{userColor.b}</p>
                     </div>
                   </div>
 
@@ -1510,11 +1613,11 @@ export default function App() {
                 animate={{ opacity: 1, scale: 1, rotate: 0 }}
                 exit={{ opacity: 0, scale: 1.1, rotate: 2 }}
                 transition={{ type: "spring", damping: 20, stiffness: 100 }}
-                className="relative w-[90vw] max-w-[750px] h-[65vh] min-h-[450px] max-h-[550px] bg-black backdrop-blur-2xl flex flex-col items-center justify-center shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] rounded-[2.5rem] overflow-hidden pointer-events-auto border border-white/10 p-8 md:p-12"
+                className="relative w-[90vw] max-w-[750px] h-auto min-h-[450px] bg-black backdrop-blur-2xl flex flex-col items-center justify-center shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] rounded-[2.5rem] overflow-hidden pointer-events-auto border border-white/10 py-12 px-6 md:px-12"
               >
                 <button 
                   onClick={() => { audio.playClick(); setGameState('start'); }}
-                  className="absolute top-6 right-6 p-4 text-white hover:opacity-70 transition-opacity"
+                  className="absolute top-6 right-6 p-4 text-white hover:opacity-70 transition-opacity z-10"
                 >
                   <FaIcons.FaTimes size={24} />
                 </button>
@@ -1547,7 +1650,7 @@ export default function App() {
                    totalScore >= 40 ? '"An emerging perspective."' : '"Vision requires practice."'}
                 </p>
 
-                {gameMode === 'daily' && (
+                {(gameMode === 'daily' || gameMode === 'duo') && (
                   <div className="text-zinc-500 text-[10px] tracking-[0.2em] uppercase font-bold mb-6">
                     Next in {nextDailyCountdown}
                   </div>
@@ -1564,7 +1667,7 @@ export default function App() {
                         <div 
                           className="absolute inset-0" 
                           style={{ 
-                            background: hslToString(d.targetColor),
+                            background: hsbToString(d.targetColor),
                             clipPath: 'polygon(0 0, 100% 0, 0 100%)'
                           }} 
                         >
@@ -1576,7 +1679,7 @@ export default function App() {
                         <div 
                           className="absolute inset-0" 
                           style={{ 
-                            background: hslToString(d.userColor),
+                            background: hsbToString(d.userColor),
                             clipPath: 'polygon(100% 0, 100% 100%, 0 100%)'
                           }} 
                         >
@@ -1596,37 +1699,37 @@ export default function App() {
                 </div>
 
                 <div className="flex flex-col gap-3 w-full max-w-sm mt-4">
-                  {/* Row 1: Name Input and Post Button (Solo & Duo) */}
-                  {(gameMode === 'solo' || gameMode === 'duo') && (
+                  {/* Row 1: Name Input and Post Button (QuickPlay Only) */}
+                  {(gameMode === 'solo' || gameMode === 'duo-quickplay') && (
                     <div className="flex gap-2 w-full items-center">
-                      <div className="relative group flex-1">
-                        <div className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30 group-focus-within:text-white transition-colors">
-                          <User size={18} />
+                        <div className="relative group flex-1">
+                          <div className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30 group-focus-within:text-white transition-colors">
+                            <User size={18} />
+                          </div>
+                          <input 
+                            type="text"
+                            placeholder="Enter your name"
+                            value={playerName}
+                            onChange={(e) => setPlayerName(e.target.value.slice(0, 20))}
+                            className="w-full bg-white/5 border border-white/10 rounded-2xl py-3 pl-10 pr-4 text-white placeholder:text-white/20 focus:outline-none focus:border-white/30 transition-all font-bold"
+                          />
                         </div>
-                        <input 
-                          type="text"
-                          placeholder="Enter your name"
-                          value={playerName}
-                          onChange={(e) => setPlayerName(e.target.value.slice(0, 20))}
-                          className="w-full bg-white/5 border border-white/10 rounded-2xl py-3 pl-10 pr-4 text-white placeholder:text-white/20 focus:outline-none focus:border-white/30 transition-all font-bold"
-                        />
-                      </div>
 
-                      <button 
-                        onClick={postScore}
-                        disabled={!playerName.trim() || isPosting}
-                        className="px-6 py-3 bg-white text-black hover:bg-zinc-200 disabled:opacity-50 rounded-2xl text-base font-bold tracking-tight transition-all duration-300 flex items-center justify-center gap-2 group shadow-xl"
-                      >
-                        {isPosting ? (
-                          <div className="w-5 h-5 border-2 border-black/20 border-t-black rounded-full animate-spin" />
-                        ) : (
-                          <>
-                            <Send size={18} className="group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
-                            Post
-                          </>
-                        )}
-                      </button>
-                    </div>
+                        <button 
+                          onClick={postScore}
+                          disabled={!playerName.trim() || isPosting}
+                          className="px-6 py-3 bg-white text-black hover:bg-zinc-200 disabled:opacity-50 rounded-2xl text-base font-bold tracking-tight transition-all duration-300 flex items-center justify-center gap-2 group shadow-xl"
+                        >
+                          {isPosting ? (
+                            <div className="w-5 h-5 border-2 border-black/20 border-t-black rounded-full animate-spin" />
+                          ) : (
+                            <>
+                              <Send size={18} className="group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
+                              Post
+                            </>
+                          )}
+                        </button>
+                      </div>
                   )}
 
                   {/* Row 2: Share and Play Again Buttons */}
@@ -1639,7 +1742,7 @@ export default function App() {
                       {copied ? 'Copied!' : (gameMode === 'daily' ? 'Share' : 'Share')}
                     </button>
                     
-                    {gameMode === 'solo' && (
+                    {gameMode === 'solo' || gameMode === 'duo-quickplay' ? (
                       <button 
                         onClick={() => {
                           audio.playClick();
@@ -1647,17 +1750,17 @@ export default function App() {
                           setTotalScore(0);
                           setRoundData([]);
                           startRound(1, gameMode);
-                          trackGameStart('QuickPlay');
+                          trackGameStart(getAnalyticsModeName(gameMode));
                         }}
                         className="flex-1 px-6 py-4 border border-white/10 text-zinc-400 hover:text-white hover:border-white/30 rounded-2xl text-sm font-bold tracking-tight transition-all duration-300"
                       >
                         Play Again
                       </button>
-                    )}
+                    ) : null}
                   </div>
                 </div>
                 
-                {gameMode !== 'solo' && (
+                {(gameMode === 'daily' || gameMode === 'duo') && (
                   <p className="text-black/40 text-[10px] tracking-widest uppercase mt-4 text-center font-bold">
                     Come back tomorrow for a new exhibition.
                   </p>

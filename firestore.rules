@@ -5,21 +5,18 @@ service cloud.firestore {
     // Assumed Data Model
     // ===============================================================
     //
-    // Collection: scores (Solo Mode)
-    // Fields:
-    //   - name: string (required, 1-20 chars)
-    //   - score: number (required, 0-100)
-    //   - timestamp: timestamp (required)
-    //
-    // Collection: daily_scores (Daily Mode)
+    // Collection: classic_daily_scores / classic_quickplay_scores / duo_daily_scores / duo_quickplay_scores
     // Fields:
     //   - sessionId: string (required)
     //   - createdAt: timestamp (required)
     //   - period: int (required)
     //   - score: number (required, 0-100)
+    //   - mode: string (required)
     //   - deviceType: string (required, 'mobile', 'desktop', 'tablet')
     //   - userId: string (required)
     //   - userType: string (required, 'new', 'returning')
+    //   - isPosted: bool (required)
+    //   - name: string (optional)
     //
     // ===============================================================
 
@@ -34,44 +31,78 @@ service cloud.firestore {
           (request.auth.token.email == "aneeshakc88@gmail.com" && request.auth.token.email_verified == true));
     }
 
-    function isValidScore(data) {
-      return data.keys().hasAll(['name', 'score', 'timestamp']) &&
-             data.name is string && data.name.size() >= 1 && data.name.size() <= 20 &&
-             data.score is number && data.score >= 0 && data.score <= 100 &&
-             data.timestamp is timestamp;
-    }
-
     function isValidDailyScore(data) {
-      return data.keys().hasAll(['sessionId', 'createdAt', 'period', 'score', 'deviceType', 'userId', 'userType']) &&
+      return data.keys().hasAll(['sessionId', 'createdAt', 'period', 'score', 'mode', 'deviceType', 'userId', 'userType', 'isPosted']) &&
              data.sessionId is string &&
              data.createdAt is timestamp &&
              data.period is int &&
              data.score is number && data.score >= 0 && data.score <= 100 &&
+             data.mode in ['daily', 'solo', 'duo', 'duo-quickplay'] &&
              data.deviceType in ['mobile', 'desktop', 'tablet'] &&
              data.userId is string &&
-             data.userType in ['new', 'returning'];
+             data.userType in ['new', 'returning'] &&
+             data.isPosted is bool &&
+             (!('name' in data) || (data.name is string && data.name.size() <= 20));
     }
 
-    match /scores/{scoreId} {
+    function isValidGameHistory(data) {
+      return data.keys().hasAll(['sessionId', 'timestamp', 'totalScore', 'gameMode', 'userId', 'roundData']) &&
+             data.sessionId is string &&
+             data.timestamp is timestamp &&
+             data.totalScore is number &&
+             data.gameMode is string &&
+             data.userId is string &&
+             data.roundData is list;
+    }
+
+    match /classic_daily_scores/{scoreId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && isValidScore(request.resource.data) && 
-                       request.resource.data.timestamp == request.time;
-      allow update: if false;
+      allow create: if isAuthenticated() && isValidDailyScore(request.resource.data) && 
+                       (request.resource.data.createdAt == request.time || isAdmin());
+      allow update: if isAuthenticated() && isValidDailyScore(request.resource.data) &&
+                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'isPosted']);
       allow delete: if isAdmin();
     }
 
-    match /daily_scores/{scoreId} {
+    match /classic_quickplay_scores/{scoreId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && isValidDailyScore(request.resource.data) && 
-                       request.resource.data.createdAt == request.time;
-      allow update: if false;
+                       (request.resource.data.createdAt == request.time || isAdmin());
+      allow update: if isAuthenticated() && isValidDailyScore(request.resource.data) &&
+                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'isPosted']);
       allow delete: if isAdmin();
     }
 
     match /duo_daily_scores/{scoreId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && isValidDailyScore(request.resource.data) && 
-                       request.resource.data.createdAt == request.time;
+                       (request.resource.data.createdAt == request.time || isAdmin());
+      allow update: if isAuthenticated() && isValidDailyScore(request.resource.data) &&
+                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'isPosted']);
+      allow delete: if isAdmin();
+    }
+
+    match /duo_quickplay_scores/{scoreId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidDailyScore(request.resource.data) && 
+                       (request.resource.data.createdAt == request.time || isAdmin());
+      allow update: if isAuthenticated() && isValidDailyScore(request.resource.data) &&
+                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'isPosted']);
+      allow delete: if isAdmin();
+    }
+
+    match /classic_history/{historyId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidGameHistory(request.resource.data) && 
+                       (request.resource.data.timestamp == request.time || isAdmin());
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
+
+    match /duo_history/{historyId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidGameHistory(request.resource.data) && 
+                       (request.resource.data.timestamp == request.time || isAdmin());
       allow update: if false;
       allow delete: if isAdmin();
     }

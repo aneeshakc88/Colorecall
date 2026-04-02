@@ -1,29 +1,8 @@
 {
   "entities": {
-    "Score": {
-      "title": "Score",
-      "description": "A solo game score entry",
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string",
-          "description": "Player name or initials"
-        },
-        "score": {
-          "type": "number",
-          "description": "Total score achieved"
-        },
-        "timestamp": {
-          "type": "string",
-          "format": "date-time",
-          "description": "When the score was posted"
-        }
-      },
-      "required": ["name", "score", "timestamp"]
-    },
     "DailyScore": {
       "title": "DailyScore",
-      "description": "A daily game score entry",
+      "description": "A daily or quickplay game score entry (auto-posted)",
       "type": "object",
       "properties": {
         "sessionId": {
@@ -43,6 +22,10 @@
           "type": "number",
           "description": "Total score achieved"
         },
+        "mode": {
+          "type": "string",
+          "description": "Game mode (daily, solo, duo, duo-quickplay)"
+        },
         "deviceType": {
           "type": "string",
           "enum": ["mobile", "desktop", "tablet"],
@@ -56,23 +39,90 @@
           "type": "string",
           "enum": ["new", "returning"],
           "description": "Type of user"
+        },
+        "name": {
+          "type": "string",
+          "description": "Optional player name for leaderboard"
+        },
+        "isPosted": {
+          "type": "boolean",
+          "description": "Whether the score is posted to the leaderboard"
         }
       },
-      "required": ["sessionId", "createdAt", "period", "score", "deviceType", "userId", "userType"]
+      "required": ["sessionId", "createdAt", "period", "score", "mode", "deviceType", "userId", "userType", "isPosted"]
+    },
+    "GameHistory": {
+      "title": "GameHistory",
+      "description": "Detailed round-by-round history of a game session",
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "description": "Unique session ID"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the game was completed"
+        },
+        "totalScore": {
+          "type": "number",
+          "description": "Final total score"
+        },
+        "gameMode": {
+          "type": "string",
+          "description": "Mode played (daily, solo, duo, duo-quickplay)"
+        },
+        "deviceType": {
+          "type": "string",
+          "description": "Device used"
+        },
+        "userId": {
+          "type": "string",
+          "description": "Unique user ID"
+        },
+        "roundData": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "round": { "type": "integer" },
+              "targetColor": { "type": "object" },
+              "userColor": { "type": "object" },
+              "targetObjectIndex": { "type": "integer" },
+              "userObjectIndex": { "type": "integer" },
+              "score": { "type": "number" }
+            }
+          }
+        }
+      },
+      "required": ["sessionId", "timestamp", "totalScore", "gameMode", "roundData"]
     }
   },
   "firestore": {
-    "/scores/{scoreId}": {
-      "schema": "Score",
-      "description": "Collection of solo game scores"
-    },
-    "/daily_scores/{scoreId}": {
+    "/classic_daily_scores/{scoreId}": {
       "schema": "DailyScore",
-      "description": "Collection of daily game scores"
+      "description": "Collection of all Classic Daily game scores (auto-posted)"
+    },
+    "/classic_quickplay_scores/{scoreId}": {
+      "schema": "DailyScore",
+      "description": "Collection of all Classic QuickPlay game scores"
     },
     "/duo_daily_scores/{scoreId}": {
       "schema": "DailyScore",
-      "description": "Collection of duo daily game scores"
+      "description": "Collection of all Duo Daily game scores (auto-posted)"
+    },
+    "/duo_quickplay_scores/{scoreId}": {
+      "schema": "DailyScore",
+      "description": "Collection of all Duo QuickPlay game scores"
+    },
+    "/classic_history/{historyId}": {
+      "schema": "GameHistory",
+      "description": "Detailed history for Classic/Solo games"
+    },
+    "/duo_history/{historyId}": {
+      "schema": "GameHistory",
+      "description": "Detailed history for Duo games"
     }
   }
 }
