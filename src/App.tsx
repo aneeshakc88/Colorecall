@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { ArrowRight, Share2, Trophy, User, Calendar, Send, Volume2, VolumeX, RefreshCw } from 'lucide-react';
 import * as FaIcons from 'react-icons/fa';
@@ -949,6 +950,12 @@ export default function App() {
       >
         Colorecall
       </button>
+
+      {/* Footer Links */}
+      <div className="fixed bottom-3 left-0 w-full justify-center lg:bottom-6 lg:left-6 lg:w-auto lg:justify-start z-50 flex gap-4 text-[10px] sm:text-xs font-medium text-zinc-400">
+        <Link to="/terms" className="hover:text-zinc-900 transition-colors">Terms of Service</Link>
+        <Link to="/privacy" className="hover:text-zinc-900 transition-colors">Privacy Policy</Link>
+      </div>
 
       {/* Main Content Area */}
       <div className="flex-1 w-full flex flex-col items-center justify-center relative p-4 md:p-8">
