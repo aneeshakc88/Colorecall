@@ -3,13 +3,22 @@
 
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-serif: "Inter", serif; /* Using Inter for both for that clean Apple look */
+  --font-serif: "Inter", serif;
+  /* Using Inter for both for that clean Apple look */
+  
+  --animate-spin-slow: slide-around 4s linear infinite;
+
+  @keyframes slide-around {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+  }
 }
 
 @layer utilities {
   .hide-scrollbar::-webkit-scrollbar {
     display: none;
   }
+
   .hide-scrollbar {
     -ms-overflow-style: none;
     scrollbar-width: none;

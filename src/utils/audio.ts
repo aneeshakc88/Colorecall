@@ -247,6 +247,29 @@ class AudioEngine {
     });
   }
 
+  // Subtle hover sound
+  public playHover() {
+    if (!this.isEnabled) return;
+    this.init();
+    if (!this.ctx || !this.masterGain) return;
+
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(600, this.ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(300, this.ctx.currentTime + 0.05);
+
+    gain.gain.setValueAtTime(0.03, this.ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + 0.05);
+
+    osc.connect(gain);
+    gain.connect(this.masterGain);
+
+    osc.start();
+    osc.stop(this.ctx.currentTime + 0.05);
+  }
+
   // Standard UI click
   public playClick() {
     this.playTone(600, 'sine', 0.05, 0.2);
