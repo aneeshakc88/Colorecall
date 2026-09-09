@@ -1,0 +1,14 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "flag_daily_scores",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "isPosted", "order": "ASCENDING" },
+        { "fieldPath": "period", "order": "ASCENDING" },
+        { "fieldPath": "score", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

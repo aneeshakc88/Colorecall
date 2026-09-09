@@ -37,7 +37,7 @@ service cloud.firestore {
              data.createdAt is timestamp &&
              data.period is int &&
              data.score is number && data.score >= 0 && data.score <= 100 &&
-             data.mode in ['daily', 'solo', 'duo', 'duo-quickplay'] &&
+             data.mode in ['daily', 'solo', 'duo', 'duo-quickplay', 'flag'] &&
              data.deviceType in ['mobile', 'desktop', 'tablet'] &&
              data.userId is string &&
              data.userType in ['new', 'returning'] &&
@@ -57,36 +57,50 @@ service cloud.firestore {
 
     match /classic_daily_scores/{scoreId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && isValidDailyScore(request.resource.data) && 
-                       (request.resource.data.createdAt == request.time || isAdmin());
+      allow create: if isAuthenticated() && isValidDailyScore(request.resource.data) &&
+                       ((request.resource.data.createdAt == request.time && request.resource.data.userId == request.auth.uid) || isAdmin());
       allow update: if isAuthenticated() && isValidDailyScore(request.resource.data) &&
+                       resource.data.userId == request.auth.uid &&
                        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'isPosted']);
       allow delete: if isAdmin();
     }
 
     match /classic_quickplay_scores/{scoreId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && isValidDailyScore(request.resource.data) && 
-                       (request.resource.data.createdAt == request.time || isAdmin());
+      allow create: if isAuthenticated() && isValidDailyScore(request.resource.data) &&
+                       ((request.resource.data.createdAt == request.time && request.resource.data.userId == request.auth.uid) || isAdmin());
       allow update: if isAuthenticated() && isValidDailyScore(request.resource.data) &&
+                       resource.data.userId == request.auth.uid &&
                        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'isPosted']);
       allow delete: if isAdmin();
     }
 
     match /duo_daily_scores/{scoreId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && isValidDailyScore(request.resource.data) && 
-                       (request.resource.data.createdAt == request.time || isAdmin());
+      allow create: if isAuthenticated() && isValidDailyScore(request.resource.data) &&
+                       ((request.resource.data.createdAt == request.time && request.resource.data.userId == request.auth.uid) || isAdmin());
       allow update: if isAuthenticated() && isValidDailyScore(request.resource.data) &&
+                       resource.data.userId == request.auth.uid &&
                        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'isPosted']);
       allow delete: if isAdmin();
     }
 
     match /duo_quickplay_scores/{scoreId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && isValidDailyScore(request.resource.data) && 
-                       (request.resource.data.createdAt == request.time || isAdmin());
+      allow create: if isAuthenticated() && isValidDailyScore(request.resource.data) &&
+                       ((request.resource.data.createdAt == request.time && request.resource.data.userId == request.auth.uid) || isAdmin());
       allow update: if isAuthenticated() && isValidDailyScore(request.resource.data) &&
+                       resource.data.userId == request.auth.uid &&
+                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'isPosted']);
+      allow delete: if isAdmin();
+    }
+
+    match /flag_daily_scores/{scoreId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidDailyScore(request.resource.data) &&
+                       ((request.resource.data.createdAt == request.time && request.resource.data.userId == request.auth.uid) || isAdmin());
+      allow update: if isAuthenticated() && isValidDailyScore(request.resource.data) &&
+                       resource.data.userId == request.auth.uid &&
                        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'isPosted']);
       allow delete: if isAdmin();
     }

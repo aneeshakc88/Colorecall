@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { ArrowRight, Share2, Trophy, User, Calendar, Send, Volume2, VolumeX, RefreshCw } from 'lucide-react';
@@ -6,8 +6,22 @@ import * as FaIcons from 'react-icons/fa';
 import { db } from './firebase';
 import { getDynamicFeedback } from './utils';
 import { audio } from './utils/audio';
+import { Color, hsbToRgb, hsbToString, VerticalSlider, AnimatedScore, getUserId, getMyUserIds, getUserType, getDeviceType, generateSessionId } from './utils/colorMath';
+import FlagGame from './flag/FlagGame';
+import { FlagIntroRing } from './flag/FlagRing';
+import { FlagSplitHero } from './flag/FlagSplitHero';
+import { getCurrentCycle, getNextResetTime, cycleDateLabel } from './daily-cycle';
+
+// Split Hero is the only flag intro anywhere, dev included. The alternates stay
+// in the tree but are reachable only via ?heroLab=1.
+const HERO_LAB = new URLSearchParams(window.location.search).has('heroLab');
+
+const MEDAL_HEX = ['#fbbf24', '#cbd5e1', '#f0a868'];
+import { FlagDeckHero } from './flag/FlagDeckHero';
+import { FlagDemoHero } from './flag/FlagDemoHero';
 import { initGA, trackPageView, trackButtonClick, trackGameStart, trackGameEnd } from './analytics';
-import { collection, addDoc, query, orderBy, getDocs, serverTimestamp, where, Timestamp, updateDoc, doc } from 'firebase/firestore';
+import { collection, addDoc, query, orderBy, getDocs, serverTimestamp, where, Timestamp, updateDoc, doc, limit, getCountFromServer } from 'firebase/firestore';
+import Leaderboard, { BoardData, BoardRow, MyStats } from './components/Leaderboard';
 import { signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, User as FirebaseUser } from 'firebase/auth';
 import { auth } from './firebase';
 
@@ -62,7 +76,6 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   throw new Error(JSON.stringify(errInfo));
 }
 
-type Color = { h: number; s: number; b: number };
 type GameState = 'start' | 'ready' | 'memorize' | 'recreate' | 'result' | 'final';
 
 type RoundData = {
@@ -80,17 +93,6 @@ const allIcons = Object.entries(FaIcons)
 const OBJECTS = allIcons.slice(0, 500);
 
 // --- DAILY SEEDED RANDOM GENERATOR ---
-const CYCLE_HOURS = 18;
-const EPOCH = new Date('2024-01-01T00:00:00Z').getTime();
-
-const getCurrentCycle = () => {
-  return Math.floor((Date.now() - EPOCH) / (CYCLE_HOURS * 60 * 60 * 1000));
-};
-
-const getNextResetTime = () => {
-  const currentCycle = getCurrentCycle();
-  return (currentCycle + 1) * (CYCLE_HOURS * 60 * 60 * 1000) + EPOCH;
-};
 
 const mulberry32 = (a: number) => {
   return function () {
@@ -127,18 +129,25 @@ const DAILY_POOL = Array.from({ length: 2000 }, () => {
   };
 });
 
-const hsbToRgb = (h: number, s: number, b: number): [number, number, number] => {
-  s /= 100; b /= 100;
-  const c = b * s, x = c * (1 - Math.abs((h / 60) % 2 - 1)), m = b - c;
-  let r = 0, g = 0, bl = 0;
-  if (h < 60) { r = c; g = x; }
-  else if (h < 120) { r = x; g = c; }
-  else if (h < 180) { g = c; bl = x; }
-  else if (h < 240) { g = x; bl = c; }
-  else if (h < 300) { r = x; bl = c; }
-  else { r = c; bl = x; }
-  return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((bl + m) * 255)];
-};
+// Separate RNG instance: drawing from poolRandom here would shift every
+// Classic daily colour, past and future.
+const duoPoolRandom = mulberry32(9173);
+
+const DUO_POOL = Array.from({ length: 2000 }, () => {
+  const targetIndex = Math.floor(duoPoolRandom() * OBJECTS.length);
+  let distractorIndex = Math.floor(duoPoolRandom() * OBJECTS.length);
+  while (distractorIndex === targetIndex) {
+    distractorIndex = Math.floor(duoPoolRandom() * OBJECTS.length);
+  }
+  return {
+    color: generateSeededColor(duoPoolRandom),
+    objectIndex: targetIndex,
+    options: [targetIndex],
+    distractorColor: generateSeededColor(duoPoolRandom),
+    distractorObjectIndex: distractorIndex,
+    targetPosition: (duoPoolRandom() > 0.5 ? 1 : 0) as 0 | 1
+  };
+});
 
 const rgbToLab = (r: number, g: number, b: number): [number, number, number] => {
   r /= 255; g /= 255; b /= 255;
@@ -215,146 +224,6 @@ const getScoreText = (score: number) => {
   return "That's not it.";
 };
 
-const hsbToString = (c: Color, alpha: number = 1) => {
-  const [r, g, b] = hsbToRgb(c.h, c.s, c.b);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-};
-
-const STATIC_LEADERBOARD = (() => {
-  const parts = ["VS", "Int", "Xy", "Qo", "Pl", "Tr", "Mn", "Bk", "Jz", "Wq", "Vn", "Cr", "Op", "Am", "Jd", "Rb", "Sp", "Tp", "Br", "On"];
-  const scores = [];
-  let currentScore = 95.0;
-  for (let i = 0; i < 120; i++) {
-    const name = parts[Math.floor(Math.random() * parts.length)] + parts[Math.floor(Math.random() * parts.length)];
-    scores.push({ name, score: Number(currentScore.toFixed(2)) });
-    currentScore -= 0.4 + Math.random() * 0.2;
-  }
-  return scores;
-})();
-
-const AnimatedScore = ({ value, onComplete }: { value: number, onComplete?: () => void }) => {
-  const [displayValue, setDisplayValue] = useState(0);
-  const lastTickTime = useRef(0);
-  const onCompleteRef = useRef(onComplete);
-
-  useEffect(() => {
-    onCompleteRef.current = onComplete;
-  }, [onComplete]);
-
-  useEffect(() => {
-    let startTimestamp: number | null = null;
-    const duration = 1500; // 1.5 seconds
-    let animationFrameId: number;
-
-    const step = (timestamp: number) => {
-      if (!startTimestamp) startTimestamp = timestamp;
-      const progress = Math.min((timestamp - startTimestamp) / duration, 1);
-      const easeProgress = 1 - Math.pow(1 - progress, 4); // easeOutQuart
-      setDisplayValue(easeProgress * value);
-
-      // Play roll sound every ~50ms
-      if (timestamp - lastTickTime.current > 50 && progress < 1) {
-        audio.playScoreRollTick();
-        lastTickTime.current = timestamp;
-      }
-
-      if (progress < 1) {
-        animationFrameId = window.requestAnimationFrame(step);
-      } else {
-        setDisplayValue(value);
-        if (onCompleteRef.current) onCompleteRef.current();
-      }
-    };
-
-    animationFrameId = window.requestAnimationFrame(step);
-    return () => window.cancelAnimationFrame(animationFrameId);
-  }, [value]);
-
-  return <>{displayValue.toFixed(2)}</>;
-};
-
-// --- VERTICAL DIALED.GG STYLE SLIDER ---
-const VerticalSlider = ({
-  value, max, onChange, bg, type
-}: {
-  value: number, max: number, onChange: (v: number) => void, bg: string, type: 'H' | 'S' | 'B'
-}) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const lastSoundTime = useRef<number>(0);
-  const lastSoundValue = useRef<number>(value);
-
-  const handlePointerEvent = (e: React.PointerEvent) => {
-    if (!containerRef.current) return;
-    if (e.type === 'pointerdown') {
-      e.currentTarget.setPointerCapture(e.pointerId);
-    }
-    const rect = containerRef.current.getBoundingClientRect();
-    let y = e.clientY - rect.top;
-    y = Math.max(16, Math.min(y, rect.height - 16));
-    const percentage = type === 'H' ? ((y - 16) / (rect.height - 32)) : 1 - ((y - 16) / (rect.height - 32));
-    const newValue = Math.round(percentage * max);
-
-    if (newValue !== value) {
-      onChange(newValue);
-
-      const now = performance.now();
-      // Throttle sound to avoid machine gun effect (max once every 40ms, and only if value changed enough)
-      if (now - lastSoundTime.current > 40 && Math.abs(newValue - lastSoundValue.current) >= (max * 0.01)) {
-        audio.playColorSliderTick(type);
-        lastSoundTime.current = now;
-        lastSoundValue.current = newValue;
-      }
-    }
-  };
-
-  return (
-    <div
-      ref={containerRef}
-      className="w-10 sm:w-12 lg:w-12 h-full relative cursor-ns-resize touch-none"
-      style={{ background: bg }}
-      onPointerDown={handlePointerEvent}
-      onPointerMove={(e) => e.buttons > 0 && handlePointerEvent(e)}
-    >
-      {/* Glowing Indicator Thumb */}
-      <div
-        className="absolute left-1/2 w-7 h-7 sm:w-9 sm:h-9 lg:w-6 lg:h-6 -translate-x-1/2 -translate-y-1/2 bg-white rounded-full shadow-lg pointer-events-none z-10 border border-zinc-200"
-        style={{ top: `calc(16px + ${(type === 'H' ? value / max : 1 - value / max)} * (100% - 32px))` }}
-      />
-    </div>
-  );
-};
-
-const getUserId = () => {
-  let id = localStorage.getItem('recreate_user_id');
-  if (!id) {
-    id = Math.random().toString(36).substring(2, 15);
-    localStorage.setItem('recreate_user_id', id);
-  }
-  return id;
-};
-
-const getUserType = () => {
-  const hasPlayed = localStorage.getItem('recreate_has_played');
-  if (!hasPlayed) {
-    localStorage.setItem('recreate_has_played', 'true');
-    return 'new';
-  }
-  return 'returning';
-};
-
-const getDeviceType = () => {
-  const ua = navigator.userAgent;
-  if (/(tablet|ipad|playbook|silk)|(android(?!.*mobi))/i.test(ua)) {
-    return "tablet";
-  }
-  if (/Mobile|Android|iP(hone|od)|IEMobile|BlackBerry|Kindle|Silk-Accelerated|(hpw|web)OS|Opera M(obi|ini)/.test(ua)) {
-    return "mobile";
-  }
-  return "desktop";
-};
-
-const generateSessionId = () => Math.random().toString(36).substring(2, 15);
-
 const SplashParticles = ({ triggerKey }: { triggerKey: number }) => {
   const multiColors = ['#ef4444', '#f59e0b', '#10b981', '#3b82f6', '#8b5cf6', '#ec4899', '#06b6d4'];
 
@@ -398,6 +267,101 @@ const SplashParticles = ({ triggerKey }: { triggerKey: number }) => {
   );
 };
 
+function computeMyStats(docs: { score: number; createdAt: Timestamp | null }[]): MyStats {
+  if (docs.length === 0) return { played: 0, avg: 0, streak: 0, maxStreak: 0 };
+
+  // Streak counts calendar days, not `period`: a cycle is 18h, so two
+  // periods can land on one day and must not count twice.
+  const utcDay = (ms: number) => Math.floor(ms / 86400000);
+  const days = [...new Set(
+    docs.filter(d => d.createdAt).map(d => utcDay(d.createdAt!.toMillis()))
+  )].sort((a, b) => b - a);
+
+  const today = utcDay(Date.now());
+  let streak = 0;
+  if (days.length && (days[0] === today || days[0] === today - 1)) {
+    let cursor = days[0];
+    for (const d of days) {
+      if (d !== cursor) break;
+      streak++;
+      cursor--;
+    }
+  }
+
+  let maxStreak = 0;
+  let run = 0;
+  for (let i = 0; i < days.length; i++) {
+    run = i > 0 && days[i - 1] - days[i] === 1 ? run + 1 : 1;
+    maxStreak = Math.max(maxStreak, run);
+  }
+
+  return {
+    played: docs.length,
+    avg: docs.reduce((a, d) => a + d.score, 0) / docs.length,
+    streak,
+    maxStreak
+  };
+}
+
+function FlagStatsPanel({ stats, playerName, onRename }: { stats: MyStats | null; playerName: string; onRename: (name: string) => Promise<void> | void }) {
+  const [draft, setDraft] = useState(playerName);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => setDraft(playerName), [playerName]);
+
+  if (!stats || stats.played === 0) {
+    return (
+      <div className="py-20 font-mono text-[11px] uppercase tracking-[0.2em] text-white/40 text-center">
+        No games yet. Play a daily round to start your streak.
+      </div>
+    );
+  }
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await onRename(draft.trim());
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-4 gap-3">
+        {[
+          { label: 'Played', value: String(stats.played) },
+          { label: 'Average', value: stats.avg.toFixed(1) },
+          { label: 'Streak', value: String(stats.streak) },
+          { label: 'Max Streak', value: String(stats.maxStreak) }
+        ].map(s => (
+          <div key={s.label} className="p-5 rounded-2xl border border-white/10 bg-white/[0.05] text-center">
+            <div className="text-3xl font-black tracking-tight text-white">{s.value}</div>
+            <div className="text-[10px] uppercase tracking-[0.2em] font-black mt-2 text-white/40">{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex gap-2 items-center">
+        <input
+          type="text"
+          placeholder="Your name"
+          value={draft}
+          onChange={e => setDraft(e.target.value.slice(0, 20))}
+          className="flex-1 bg-white/5 border border-white/10 rounded-2xl py-3 px-4 text-white placeholder:text-white/20 focus:outline-none focus:border-white/30 transition-all font-bold"
+        />
+        <button
+          onClick={save}
+          disabled={saving || !draft.trim() || draft.trim() === playerName}
+          className="px-6 py-3 rounded-2xl text-sm font-bold tracking-tight transition-all disabled:opacity-40 bg-white text-black hover:bg-zinc-200"
+        >
+          {saving ? 'Saving…' : 'Save'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [gameState, setGameState] = useState<GameState>('start');
   const [gameMode, setGameMode] = useState<'daily' | 'solo' | 'duo' | 'duo-quickplay'>('daily');
@@ -415,9 +379,16 @@ export default function App() {
   const [userObject, setUserObject] = useState<React.ElementType>(OBJECTS[0]);
   const [hasPlayedToday, setHasPlayedToday] = useState(false);
   const [hasPlayedDuoToday, setHasPlayedDuoToday] = useState(false);
+  const [hasPlayedFlagToday, setHasPlayedFlagToday] = useState(false);
+  const [showFlagGame, setShowFlagGame] = useState(false);
+  const [flagLeaderboard, setFlagLeaderboard] = useState<{ id: string; userId: string; name: string; score: number }[]>([]);
+  const [flagTotalPlayers, setFlagTotalPlayers] = useState(0);
+  const [flagStats, setFlagStats] = useState<MyStats | null>(null);
+  const [flagIntroLayout, setFlagIntroLayout] = useState<'current' | 'split' | 'deck' | 'demo'>('split');
   const [copied, setCopied] = useState(false);
   const [showScoreboard, setShowScoreboard] = useState(false);
-  const [leaderboardTab, setLeaderboardTab] = useState<'daily' | 'quickplay'>('daily');
+  const [leaderboardScope, setLeaderboardScope] = useState<'daily' | 'quickplay'>('daily');
+  const [leaderboardView, setLeaderboardView] = useState<'today' | 'stats'>('today');
   const [showScoreText, setShowScoreText] = useState(false);
   const [currentOptions, setCurrentOptions] = useState<number[]>([]);
   const [playerName, setPlayerName] = useState(() => localStorage.getItem('mastery_player_name') || '');
@@ -433,16 +404,19 @@ export default function App() {
       default: return 'classic_daily_scores';
     }
   };
+  const ALL_SCORE_COLLECTIONS = ['classic_daily_scores', 'classic_quickplay_scores', 'duo_daily_scores', 'duo_quickplay_scores', 'flag_daily_scores'];
   const [isHoveringQuickPlay, setIsHoveringQuickPlay] = useState(false);
   const [isHoveringDuo, setIsHoveringDuo] = useState(false);
   const [isHoveringScore, setIsHoveringScore] = useState(false);
-  const [gameEdition, setGameEdition] = useState<'duo' | 'classic'>('duo');
+  const [gameEdition, setGameEdition] = useState<'duo' | 'classic' | 'flag'>('duo');
   const [splashTrigger, setSplashTrigger] = useState(0);
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const isAdmin = user?.email === 'aneeshakc88@gmail.com';
   const [currentFeedback, setCurrentFeedback] = useState("");
-  const [leaderboard, setLeaderboard] = useState<{ name: string; score: number; mode?: string }[]>([]);
-  const [totalPlayers, setTotalPlayers] = useState(0);
+  const [board, setBoard] = useState<BoardData | null>(null);
+  const [boardLoading, setBoardLoading] = useState(false);
+  const [myBestScore, setMyBestScore] = useState<number | null>(null);
+  const [myStats, setMyStats] = useState<MyStats | null>(null);
   const [dailyStats, setDailyStats] = useState<{ high: number; avg: number } | null>(null);
   const [duoStats, setDuoStats] = useState<{ high: number; avg: number } | null>(null);
   const [nextDailyCountdown, setNextDailyCountdown] = useState("");
@@ -461,54 +435,38 @@ export default function App() {
 
   const getEffectiveCycle = () => getCurrentCycle() + cycleOffset;
 
-  const getDailyDateString = () => {
-    const cycleStartTime = getEffectiveCycle() * (CYCLE_HOURS * 60 * 60 * 1000) + EPOCH;
-    const d = new Date(cycleStartTime);
-    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    return `${months[d.getUTCMonth()]} ${d.getUTCDate()}`;
+  const getDailyDateString = () => cycleDateLabel(getEffectiveCycle());
+
+  const isDailyMode = gameMode === 'daily' || gameMode === 'duo';
+
+  const fetchDayScores = async (collectionName: string, cycle: number): Promise<BoardRow[]> => {
+    const q = query(collection(db, collectionName), where('period', '==', cycle));
+    const snap = await getDocs(q);
+    return snap.docs
+      .map(d => ({
+        id: d.id,
+        userId: (d.data().userId as string) || '',
+        name: (d.data().name as string) || 'Anonymous',
+        score: d.data().score as number,
+        isPosted: d.data().isPosted !== false
+      }))
+      .filter(r => r.isPosted)
+      .sort((a, b) => b.score - a.score);
   };
 
-  const fetchDailyStats = async () => {
+  const summarize = (rows: BoardRow[]) =>
+    rows.length > 0
+      ? { high: rows[0].score, avg: rows.reduce((a, r) => a + r.score, 0) / rows.length }
+      : null;
+
+  const refreshDayStats = async (mode: 'daily' | 'duo') => {
+    const collectionName = getCollectionName(mode);
     try {
-      const currentCycle = getEffectiveCycle();
-      const q = query(
-        collection(db, 'classic_daily_scores'),
-        where('period', '==', currentCycle)
-      );
-      const querySnapshot = await getDocs(q);
-      const scores = querySnapshot.docs.map(doc => doc.data().score as number);
-
-      if (scores.length > 0) {
-        const high = Math.max(...scores);
-        const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
-        setDailyStats({ high, avg });
-      } else {
-        setDailyStats(null);
-      }
+      const stats = summarize(await fetchDayScores(collectionName, getEffectiveCycle()));
+      if (mode === 'daily') setDailyStats(stats);
+      else setDuoStats(stats);
     } catch (error) {
-      handleFirestoreError(error, OperationType.GET, 'classic_daily_scores');
-    }
-  };
-
-  const fetchDuoStats = async () => {
-    try {
-      const currentCycle = getEffectiveCycle();
-      const q = query(
-        collection(db, 'duo_daily_scores'),
-        where('period', '==', currentCycle)
-      );
-      const querySnapshot = await getDocs(q);
-      const scores = querySnapshot.docs.map(doc => doc.data().score as number);
-
-      if (scores.length > 0) {
-        const high = Math.max(...scores);
-        const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
-        setDuoStats({ high, avg });
-      } else {
-        setDuoStats(null);
-      }
-    } catch (error) {
-      handleFirestoreError(error, OperationType.GET, 'duo_daily_scores');
+      handleFirestoreError(error, OperationType.GET, collectionName);
     }
   };
 
@@ -547,47 +505,154 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
+  const boardMode = (): 'daily' | 'solo' | 'duo' | 'duo-quickplay' =>
+    leaderboardScope === 'daily'
+      ? (gameEdition === 'duo' ? 'duo' : 'daily')
+      : (gameEdition === 'duo' ? 'duo-quickplay' : 'solo');
+
   const fetchScores = async () => {
+    const collectionName = getCollectionName(boardMode());
+    const myIds = getMyUserIds();
+    setBoardLoading(true);
     try {
-      const mode = leaderboardTab === 'daily' ? (gameEdition === 'duo' ? 'duo' : 'daily') : (gameEdition === 'duo' ? 'duo-quickplay' : 'solo');
-      const collectionName = getCollectionName(mode);
-      const q = query(
-        collection(db, collectionName),
-        where('isPosted', '==', true),
-        orderBy('score', 'desc')
-      );
-      const querySnapshot = await getDocs(q);
-      const liveScores = querySnapshot.docs.map(doc => ({
-        name: doc.data().name || 'Anonymous',
-        score: doc.data().score,
-        mode: doc.data().mode
-      }));
+      if (leaderboardScope === 'daily') {
+        const rows = await fetchDayScores(collectionName, getEffectiveCycle());
+        setBoard({ rows, total: rows.length, ...(summarize(rows) ?? { high: null, avg: null }) });
+        setMyBestScore(rows.find(r => myIds.includes(r.userId))?.score ?? null);
+      } else {
+        // All-time hall of fame: QuickPlay colours are random per player, so a
+        // day-scoped board would only reward whoever replayed most.
+        const topSnap = await getDocs(query(
+          collection(db, collectionName),
+          where('isPosted', '==', true),
+          orderBy('score', 'desc'),
+          limit(100)
+        ));
+        const rows: BoardRow[] = topSnap.docs.map(d => ({
+          id: d.id,
+          userId: (d.data().userId as string) || '',
+          name: (d.data().name as string) || 'Anonymous',
+          score: d.data().score as number
+        }));
+        // The list is capped, so the player count needs its own aggregate read.
+        const countSnap = await getCountFromServer(query(
+          collection(db, collectionName),
+          where('isPosted', '==', true)
+        ));
+        setBoard({
+          rows,
+          total: countSnap.data().count,
+          ...(summarize(rows) ?? { high: null, avg: null })
+        });
 
-      // Get total count for the current mode
-      const countQuery = query(collection(db, collectionName), where('isPosted', '==', true));
-      const countSnapshot = await getDocs(countQuery);
-
-      // Only include static scores if in classic mode, or if they are relevant
-      const staticScores = gameEdition === 'classic' && leaderboardTab === 'daily' ? STATIC_LEADERBOARD : [];
-      setTotalPlayers(countSnapshot.size + staticScores.length);
-
-      const combined = [...liveScores, ...staticScores].sort((a, b) => b.score - a.score);
-      setLeaderboard(combined);
+        // Their best run can sit outside the top 100, so it needs its own read.
+        const mineSnap = await getDocs(query(
+          collection(db, collectionName),
+          where('userId', 'in', myIds),
+          where('isPosted', '==', true)
+        ));
+        const mine = mineSnap.docs.map(d => d.data().score as number);
+        setMyBestScore(mine.length ? Math.max(...mine) : null);
+      }
     } catch (error) {
-      const mode = leaderboardTab === 'daily' ? (gameEdition === 'duo' ? 'duo' : 'daily') : (gameEdition === 'duo' ? 'duo-quickplay' : 'solo');
-      const collectionName = getCollectionName(mode);
+      setBoard({ rows: [], total: 0, high: null, avg: null });
+      handleFirestoreError(error, OperationType.GET, collectionName);
+    } finally {
+      setBoardLoading(false);
+    }
+  };
+
+  const fetchMyStats = async () => {
+    if (leaderboardScope !== 'daily') return;
+    const collectionName = getCollectionName(boardMode());
+    try {
+      const snap = await getDocs(query(
+        collection(db, collectionName),
+        where('userId', 'in', getMyUserIds())
+      ));
+      const docs = snap.docs.map(d => ({
+        score: d.data().score as number,
+        createdAt: d.data().createdAt as Timestamp | null
+      }));
+      setMyStats(computeMyStats(docs));
+    } catch (error) {
       handleFirestoreError(error, OperationType.GET, collectionName);
     }
   };
 
-  useEffect(() => {
-    if (showScoreboard) {
-      fetchScores();
+  const fetchFlagStats = async () => {
+    try {
+      const snap = await getDocs(query(
+        collection(db, 'flag_daily_scores'),
+        where('userId', 'in', getMyUserIds())
+      ));
+      const docs = snap.docs.map(d => ({
+        score: d.data().score as number,
+        createdAt: d.data().createdAt as Timestamp | null
+      }));
+      setFlagStats(computeMyStats(docs));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.GET, 'flag_daily_scores');
     }
-  }, [showScoreboard, gameEdition, leaderboardTab]);
+  };
+
+  const renameMyScores = async (name: string) => {
+    const trimmed = name.slice(0, 20).trim();
+    if (!trimmed) return;
+    const myId = getUserId();
+    try {
+      await Promise.all(ALL_SCORE_COLLECTIONS.map(async (collectionName) => {
+        const snap = await getDocs(query(
+          collection(db, collectionName),
+          where('userId', '==', myId)
+        ));
+        await Promise.all(snap.docs.map(d => updateDoc(d.ref, { name: trimmed })));
+      }));
+      localStorage.setItem('mastery_player_name', trimmed);
+      setPlayerName(trimmed);
+      await fetchScores();
+      if (gameEdition === 'flag') await fetchFlagScores();
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'score_collections');
+    }
+  };
+
+  useEffect(() => {
+    if (!showScoreboard) return;
+    fetchScores();
+    fetchMyStats();
+  }, [showScoreboard, gameEdition, leaderboardScope]);
+
+  const fetchFlagScores = async () => {
+    try {
+      const q = query(
+        collection(db, 'flag_daily_scores'),
+        where('isPosted', '==', true),
+        where('period', '==', getEffectiveCycle()),
+        orderBy('score', 'desc')
+      );
+      const querySnapshot = await getDocs(q);
+      const liveScores = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        userId: (doc.data().userId as string) || '',
+        name: doc.data().name || 'Anonymous',
+        score: doc.data().score,
+      }));
+      setFlagTotalPlayers(liveScores.length);
+      setFlagLeaderboard(liveScores);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.GET, 'flag_daily_scores');
+    }
+  };
+
+  useEffect(() => {
+    if (gameEdition === 'flag') {
+      fetchFlagScores();
+      fetchFlagStats();
+    }
+  }, [showScoreboard, gameEdition]);
 
   const postGameHistory = async (finalTotal: number, finalRoundData: RoundData[]) => {
-    console.log("Attempting to post game history...", { finalTotal, gameMode });
     try {
       const isDuo = gameMode === 'duo' || gameMode === 'duo-quickplay';
       const collectionName = isDuo ? 'duo_history' : 'classic_history';
@@ -601,9 +666,7 @@ export default function App() {
         userId: getUserId(),
         roundData: finalRoundData
       });
-      console.log("Game history posted successfully to", collectionName);
     } catch (error) {
-      console.error("Failed to post game history:", error);
       const isDuo = gameMode === 'duo' || gameMode === 'duo-quickplay';
       handleFirestoreError(error, OperationType.WRITE, isDuo ? 'duo_history' : 'classic_history');
     }
@@ -629,8 +692,7 @@ export default function App() {
         isPosted: isPosted
       });
       setCurrentScoreDocId(docRef.id);
-      if (mode === 'daily' || mode === 'solo') fetchDailyStats();
-      else fetchDuoStats();
+      if (mode === 'daily' || mode === 'duo') refreshDayStats(mode);
     } catch (error) {
       const collectionName = getCollectionName(mode);
       handleFirestoreError(error, OperationType.WRITE, collectionName);
@@ -642,7 +704,6 @@ export default function App() {
     trackButtonClick('PostScore');
     if (!playerName.trim() || isPosting) return;
     setIsPosting(true);
-    console.log("Attempting to post score...", { playerName, totalScore, gameMode });
     localStorage.setItem('mastery_player_name', playerName.trim());
     try {
       const collectionName = getCollectionName(gameMode);
@@ -670,12 +731,10 @@ export default function App() {
       }
 
       await Promise.all(updatePromises);
-      console.log("Score posted successfully to", collectionName);
 
       setShowScoreboard(true);
       setGameState('start');
     } catch (error) {
-      console.error("Failed to post score:", error);
       const collectionName = getCollectionName(gameMode);
       handleFirestoreError(error, OperationType.WRITE, collectionName);
     } finally {
@@ -695,8 +754,12 @@ export default function App() {
     }
 
     let roundInfo;
+    let seededDuo: typeof DUO_POOL[number] | null = null;
     if (mode === 'daily') {
       roundInfo = DAILY_POOL[(getEffectiveCycle() * 4 + (r - 1)) % 2000];
+    } else if (mode === 'duo') {
+      seededDuo = DUO_POOL[(getEffectiveCycle() * 4 + (r - 1)) % 2000];
+      roundInfo = seededDuo;
     } else {
       const targetIndex = Math.floor(Math.random() * OBJECTS.length);
       const options = new Set<number>([targetIndex]);
@@ -725,7 +788,11 @@ export default function App() {
     setUserObject(() => mode.startsWith('duo') ? OBJECTS[roundInfo.objectIndex] : OBJECTS[roundInfo.options[0]]);
     setCurrentOptions(roundInfo.options);
 
-    if (mode.startsWith('duo')) {
+    if (seededDuo) {
+      setDistractorColor(seededDuo.distractorColor);
+      setDistractorObject(() => OBJECTS[seededDuo.distractorObjectIndex]);
+      setDuoTargetPosition(seededDuo.targetPosition);
+    } else if (mode.startsWith('duo')) {
       setDistractorColor({
         h: Math.floor(Math.random() * 360),
         s: 20 + Math.floor(Math.random() * 81),
@@ -766,12 +833,26 @@ export default function App() {
         const parsedDuo = JSON.parse(savedDuoState);
         if (parsedDuo.cycleId === currentCycle && parsedDuo.completed) {
           setHasPlayedDuoToday(true);
-          fetchDuoStats();
+          refreshDayStats('duo');
         } else if (parsedDuo.cycleId !== currentCycle) {
           setHasPlayedDuoToday(false);
         }
       } catch (e) {
         console.error("Failed to parse saved duo state");
+      }
+    }
+
+    const savedFlagState = localStorage.getItem('flag_daily_state');
+    if (savedFlagState) {
+      try {
+        const parsedFlag = JSON.parse(savedFlagState);
+        if (parsedFlag.cycleId === currentCycle && parsedFlag.completed) {
+          setHasPlayedFlagToday(true);
+        } else if (parsedFlag.cycleId !== currentCycle) {
+          setHasPlayedFlagToday(false);
+        }
+      } catch (e) {
+        console.error("Failed to parse saved flag state");
       }
     }
   }, [cycleOffset]);
@@ -929,40 +1010,59 @@ export default function App() {
   return (
     <div className="min-h-[100dvh] w-full flex flex-col bg-white text-zinc-900 font-sans overflow-y-auto overflow-x-hidden relative selection:bg-black selection:text-white select-none">
 
-      {/* Top Right Controls */}
-      <div className="fixed top-6 right-6 z-50 flex items-center gap-3 pointer-events-auto">
-        {gameState === 'start' && !showScoreboard && (
-          <button
-            onClick={() => {
-              audio.playTransition('splash');
-              setSplashTrigger(prev => prev + 1);
-              setGameEdition(prev => prev === 'duo' ? 'classic' : 'duo');
-            }}
-            className={`flex items-center px-4 py-2 sm:px-6 sm:py-3 backdrop-blur-md rounded-full transition-all border cursor-pointer ${(gameEdition === 'duo' && hasPlayedDuoToday) || (gameEdition === 'classic' && hasPlayedToday)
-              ? 'bg-gradient-to-r from-orange-500 to-red-500 text-white border-white/20 shadow-[0_0_20px_rgba(239,68,68,0.4)] hover:shadow-[0_0_30px_rgba(239,68,68,0.6)] hover:scale-105 active:scale-95'
-              : gameEdition === 'duo'
-                ? 'bg-white text-black border-zinc-200 shadow-xl hover:bg-zinc-100 hover:scale-105 active:scale-95'
-                : 'bg-black text-white border-transparent shadow-xl hover:bg-zinc-800 hover:scale-105 active:scale-95'
-              }`}
-          >
-            <span className="font-bold tracking-widest uppercase text-[10px] sm:text-xs">
-              Play More Colorecall
-            </span>
-          </button>
-        )}
+      {/* Top Left Mode Tabs — hidden on mobile once a round starts (overlaps game UI); always shown from sm breakpoint up */}
+      <div className={`fixed top-4 left-4 sm:top-6 sm:left-6 z-50 items-center gap-0.5 sm:gap-1 pointer-events-auto bg-white/95 backdrop-blur-md border border-zinc-200 rounded-full pl-1 pr-1.5 py-1.5 sm:pl-1.5 sm:pr-2 sm:py-2 shadow-xl ${(gameState === 'start' && !showScoreboard && !showFlagGame) ? 'flex' : 'hidden sm:flex'}`}>
+          {([
+            { key: 'duo' as const, label: 'Duo', played: hasPlayedDuoToday },
+            { key: 'classic' as const, label: 'Classic', played: hasPlayedToday },
+            { key: 'flag' as const, label: 'Flag', played: hasPlayedFlagToday },
+          ]).map(({ key, label, played }) => {
+            const active = gameEdition === key;
+            return (
+              <button
+                key={key}
+                onClick={() => {
+                  if (gameEdition === key) return;
+                  audio.playTransition('splash');
+                  setSplashTrigger(prev => prev + 1);
+                  // Switching mid-round abandons it — no score is saved.
+                  setShowFlagGame(false);
+                  setShowScoreboard(false);
+                  setGameState('start');
+                  setTotalScore(0);
+                  setRoundData([]);
+                  setGameEdition(key);
+                }}
+                className={`relative px-2.5 py-1.5 sm:px-3.5 sm:py-1.5 rounded-full text-[11px] sm:text-xs font-bold uppercase tracking-widest transition-all ${active ? 'bg-black text-white' : 'text-zinc-400 hover:text-zinc-700'}`}
+              >
+                {label}
+                {played && (
+                  <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-orange-500" />
+                )}
+              </button>
+            );
+          })}
       </div>
 
-      {/* Colorecall Logo */}
-      <button
-        onClick={() => {
-          audio.playTransition('splash');
-          setSplashTrigger(prev => prev + 1);
-          setGameState('start');
-        }}
-        className="fixed top-6 left-6 z-50 hidden lg:block text-2xl font-bold tracking-tighter hover:opacity-80 transition-opacity cursor-pointer"
-      >
-        Colorecall
-      </button>
+      {/* Flag intro layout switcher — staging/dev only, see HERO_LAB */}
+      {HERO_LAB && gameEdition === 'flag' && !showFlagGame && gameState === 'start' && !showScoreboard && (
+        <div className="fixed top-4 right-4 sm:top-6 sm:right-6 z-50 flex items-center gap-0.5 pointer-events-auto bg-white/95 backdrop-blur-md border border-zinc-200 rounded-full p-1 shadow-xl">
+          {([
+            { key: 'current' as const, label: 'Current' },
+            { key: 'split' as const, label: 'Split Hero' },
+            { key: 'deck' as const, label: 'Deck Hero' },
+            { key: 'demo' as const, label: 'Live Demo' },
+          ]).map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => { audio.playClick(); setFlagIntroLayout(key); }}
+              className={`px-2 py-1.5 sm:px-3 rounded-full text-[9px] sm:text-[10px] font-bold uppercase tracking-widest transition-colors ${flagIntroLayout === key ? 'bg-black text-white' : 'text-zinc-400 hover:text-zinc-700'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Footer Links */}
       <div className={`fixed bottom-3 left-0 w-full justify-center lg:bottom-6 lg:left-6 lg:w-auto lg:justify-start z-50 ${(gameState === 'start' && !showScoreboard) ? 'flex' : 'hidden lg:flex'} items-center gap-4 text-[10px] sm:text-xs font-medium text-zinc-400`}>
@@ -986,6 +1086,20 @@ export default function App() {
             <AnimatePresence mode="wait">
               {gameState === 'start' && (
                 <div className="relative w-full h-full lg:w-[90vw] lg:max-w-[750px] lg:h-[65vh] lg:min-h-[450px] lg:max-h-[550px] flex items-center justify-center pointer-events-none">
+                  {gameEdition === 'flag' && showFlagGame ? (
+                    <FlagGame
+                      hasPlayedToday={hasPlayedFlagToday}
+                      playerName={playerName}
+                      onPlayedToday={() => setHasPlayedFlagToday(true)}
+                      onExit={() => setShowFlagGame(false)}
+                      onReturnHome={() => {
+                        setShowFlagGame(false);
+                        audio.playTransition('splash');
+                        setSplashTrigger(prev => prev + 1);
+                        setGameEdition('duo');
+                      }}
+                    />
+                  ) : (
                   <AnimatePresence mode="wait">
                     {gameEdition === 'duo' ? (
                       <motion.div
@@ -1001,55 +1115,44 @@ export default function App() {
                         <div className="absolute inset-0 opacity-20 bg-gradient-to-br from-orange-500/20 to-rose-500/20 blur-3xl scale-150 pointer-events-none" />
 
                         {showScoreboard ? (
-                          <div className="flex flex-col w-full max-w-2xl z-10 h-full">
-                            <div className="flex justify-between items-center mb-6">
-                              <div className="flex items-center gap-3">
-                                <Trophy className="text-white" size={24} />
-                                <div className="flex flex-col">
-                                  <h2 className="text-3xl font-semibold tracking-tight text-white leading-none">Leaderboard</h2>
-                                  <span className="text-[10px] uppercase tracking-[0.2em] font-black text-zinc-500 mt-1">
-                                    {totalPlayers > 0 ? `${totalPlayers} Duo Players` : 'Global Rankings'}
-                                  </span>
-                                </div>
-                              </div>
-                              <button onClick={() => { audio.playClick(); setShowScoreboard(false); }} className="text-white hover:opacity-70 transition-opacity font-bold uppercase text-xs tracking-widest">
-                                Close
-                              </button>
-                            </div>
-                            <div className="flex justify-center mb-6">
-                              <div className="flex bg-zinc-800/50 p-1 rounded-full">
-                                <button
-                                  onClick={() => { audio.playClick(); setLeaderboardTab('daily'); }}
-                                  className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest transition-colors ${leaderboardTab === 'daily' ? 'bg-white text-black' : 'text-zinc-400 hover:text-white'}`}
-                                >
-                                  Daily
-                                </button>
-                                <button
-                                  onClick={() => { audio.playClick(); setLeaderboardTab('quickplay'); }}
-                                  className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest transition-colors ${leaderboardTab === 'quickplay' ? 'bg-white text-black' : 'text-zinc-400 hover:text-white'}`}
-                                >
-                                  Quick Play
-                                </button>
-                              </div>
-                            </div>
-                            <div className="space-y-4 overflow-y-auto max-h-[60vh] pr-2">
-                              {leaderboard.length > 0 ? leaderboard.map((entry, i) => (
-                                <div key={i} className="flex justify-between items-center p-6 bg-zinc-900 rounded-2xl border border-zinc-800 text-white">
-                                  <div className="flex items-center gap-4">
-                                    <span className="text-white/50 font-bold w-6 text-lg">{i + 1}</span>
-                                    <div className="flex flex-col">
-                                      <span className="font-bold text-lg">{entry.name}</span>
-                                    </div>
-                                  </div>
-                                  <span className="font-black text-lg">{entry.score.toFixed(2)}</span>
-                                </div>
-                              )) : (
-                                <div className="py-20 text-white/50 font-bold italic uppercase tracking-widest text-xs text-center">
-                                  No scores yet. Be the first.
-                                </div>
-                              )}
-                            </div>
-                          </div>
+                          <Leaderboard
+                            theme="dark"
+                            editionLabel="Duo"
+                            scope={leaderboardScope}
+                            view={leaderboardView}
+                            onScopeChange={s => { audio.playClick(); setLeaderboardScope(s); setLeaderboardView('today'); }}
+                            onViewChange={v => { audio.playClick(); setLeaderboardView(v); }}
+                            onClose={() => { audio.playClick(); setShowScoreboard(false); }}
+                            board={board}
+                            loading={boardLoading}
+                            myUserIds={getMyUserIds()}
+                            myBestScore={myBestScore}
+                            stats={myStats}
+                            playerName={playerName}
+                            onRename={renameMyScores}
+                            canRename={myStats !== null && myStats.played > 0}
+                            onPlayToday={() => {
+                              audio.playClick();
+                              setShowScoreboard(false);
+                              trackButtonClick('Duo');
+                              if (hasPlayedDuoToday) {
+                                const savedState = localStorage.getItem('duo_daily_chroma_state');
+                                if (savedState) {
+                                  const parsed = JSON.parse(savedState);
+                                  setTotalScore(parsed.totalScore);
+                                  setRoundData(parsed.roundData || []);
+                                  setRound(parsed.roundData ? parsed.roundData.length : 4);
+                                  setGameMode('duo');
+                                  setGameState('final');
+                                }
+                              } else {
+                                setTotalScore(0);
+                                setRoundData([]);
+                                startRound(1, 'duo');
+                                trackGameStart('Duo - Daily');
+                              }
+                            }}
+                          />
                         ) : (
                           <div className="flex flex-col h-full justify-start sm:justify-between items-start w-full max-w-2xl gap-8 sm:gap-4 relative z-10 pt-12 sm:pt-2">
                             <motion.div
@@ -1136,7 +1239,7 @@ export default function App() {
                           </div>
                         )}
                       </motion.div>
-                    ) : (
+                    ) : gameEdition === 'classic' ? (
                       <motion.div
                         key="classic-screen"
                         initial={{ clipPath: 'circle(0% at 50% 100%)', scale: 0.8, y: 50 }}
@@ -1146,55 +1249,44 @@ export default function App() {
                         className="w-full h-full fixed inset-0 lg:relative lg:w-[90vw] lg:max-w-[750px] lg:h-[65vh] lg:min-h-[450px] lg:max-h-[550px] bg-white lg:rounded-[2.5rem] shadow-2xl flex flex-col items-center justify-center p-6 lg:p-10 overflow-hidden pointer-events-auto border border-zinc-100"
                       >
                         {showScoreboard ? (
-                          <div className="flex flex-col w-full h-full">
-                            <div className="flex justify-between items-center mb-6">
-                              <div className="flex items-center gap-3">
-                                <Trophy className="text-amber-500" size={24} />
-                                <div className="flex flex-col">
-                                  <h2 className="text-3xl font-semibold tracking-tight text-black leading-none">Leaderboard</h2>
-                                  <span className="text-[10px] uppercase tracking-[0.2em] font-black text-zinc-400 mt-1">
-                                    {totalPlayers > 0 ? `${totalPlayers} Classic Players` : 'Global Rankings'}
-                                  </span>
-                                </div>
-                              </div>
-                              <button onClick={() => { audio.playClick(); setShowScoreboard(false); }} className="text-black hover:opacity-70 transition-opacity font-bold uppercase text-xs tracking-widest">
-                                Close
-                              </button>
-                            </div>
-                            <div className="flex justify-center mb-6">
-                              <div className="flex bg-zinc-100 p-1 rounded-full">
-                                <button
-                                  onClick={() => { audio.playClick(); setLeaderboardTab('daily'); }}
-                                  className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest transition-colors ${leaderboardTab === 'daily' ? 'bg-black text-white' : 'text-zinc-500 hover:text-black'}`}
-                                >
-                                  Daily
-                                </button>
-                                <button
-                                  onClick={() => { audio.playClick(); setLeaderboardTab('quickplay'); }}
-                                  className={`px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest transition-colors ${leaderboardTab === 'quickplay' ? 'bg-black text-white' : 'text-zinc-500 hover:text-black'}`}
-                                >
-                                  Quick Play
-                                </button>
-                              </div>
-                            </div>
-                            <div className="space-y-4 overflow-y-auto max-h-[350px] pr-2">
-                              {leaderboard.length > 0 ? leaderboard.map((entry, i) => (
-                                <div key={i} className="flex justify-between items-center p-6 bg-zinc-50 rounded-2xl border border-zinc-100 text-black">
-                                  <div className="flex items-center gap-4">
-                                    <span className="text-black/30 font-bold w-6 text-lg">{i + 1}</span>
-                                    <div className="flex flex-col">
-                                      <span className="font-bold text-lg">{entry.name}</span>
-                                    </div>
-                                  </div>
-                                  <span className="font-black text-lg">{entry.score.toFixed(2)}</span>
-                                </div>
-                              )) : (
-                                <div className="py-20 text-black/40 font-bold italic uppercase tracking-widest text-xs text-center">
-                                  No scores yet. Be the first.
-                                </div>
-                              )}
-                            </div>
-                          </div>
+                          <Leaderboard
+                            theme="light"
+                            editionLabel="Classic"
+                            scope={leaderboardScope}
+                            view={leaderboardView}
+                            onScopeChange={s => { audio.playClick(); setLeaderboardScope(s); setLeaderboardView('today'); }}
+                            onViewChange={v => { audio.playClick(); setLeaderboardView(v); }}
+                            onClose={() => { audio.playClick(); setShowScoreboard(false); }}
+                            board={board}
+                            loading={boardLoading}
+                            myUserIds={getMyUserIds()}
+                            myBestScore={myBestScore}
+                            stats={myStats}
+                            playerName={playerName}
+                            onRename={renameMyScores}
+                            canRename={myStats !== null && myStats.played > 0}
+                            onPlayToday={() => {
+                              audio.playClick();
+                              setShowScoreboard(false);
+                              trackButtonClick('Daily');
+                              if (hasPlayedToday) {
+                                const savedState = localStorage.getItem('daily_chroma_state');
+                                if (savedState) {
+                                  const parsed = JSON.parse(savedState);
+                                  setTotalScore(parsed.totalScore);
+                                  setRoundData(parsed.roundData || []);
+                                  setRound(parsed.roundData ? parsed.roundData.length : 4);
+                                  setGameMode('daily');
+                                  setGameState('final');
+                                }
+                              } else {
+                                trackGameStart('Classic - Daily');
+                                setTotalScore(0);
+                                setRoundData([]);
+                                startRound(1, 'daily');
+                              }
+                            }}
+                          />
                         ) : (
                           <div className="flex flex-col h-full justify-start sm:justify-between items-start w-full max-w-2xl gap-8 sm:gap-4 relative z-10 pt-12 sm:pt-2">
                             <motion.div
@@ -1281,8 +1373,233 @@ export default function App() {
                           </div>
                         )}
                       </motion.div>
+                    ) : (
+                      <motion.div
+                        key="flag-screen"
+                        initial={{ clipPath: 'circle(0% at 50% 100%)', scale: 0.8, y: 50 }}
+                        animate={{ clipPath: 'circle(150% at 50% 100%)', scale: 1, y: 0 }}
+                        exit={{ clipPath: 'circle(0% at 50% 100%)', scale: 1.1, y: -50, zIndex: 10 }}
+                        transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
+                        className="w-full h-full fixed inset-0 lg:relative lg:w-[90vw] lg:max-w-[750px] lg:h-[65vh] lg:min-h-[450px] lg:max-h-[550px] lg:rounded-[2.5rem] shadow-2xl flex flex-col items-center justify-center p-6 lg:p-10 overflow-hidden pointer-events-auto border border-zinc-800"
+                        style={{
+                          transformStyle: 'preserve-3d',
+                          background: 'radial-gradient(120% 90% at 50% 0%, #14203a 0%, #0a0e18 60%, #05070d 100%)',
+                        }}
+                      >
+                        <style>{`
+                          @keyframes fi-shine { to { background-position: 220% center; } }
+                          @keyframes fi-aurora { 0%,100%{ transform: translate(0,0) scale(1); } 33%{ transform: translate(6%,-5%) scale(1.28); } 66%{ transform: translate(-5%,4%) scale(1.12); } }
+                          @keyframes fi-cta { 0%,100%{ box-shadow: 0 14px 34px rgba(20,32,58,0.55), 0 0 0 0 rgba(147,180,255,0.16); } 50%{ box-shadow: 0 18px 48px rgba(37,99,235,0.42), 0 0 0 9px rgba(147,180,255,0.10); } }
+                          @keyframes fi-sheen { 0%{ transform: translateX(-160%) skewX(-18deg); } 60%,100%{ transform: translateX(320%) skewX(-18deg); } }
+                          @keyframes fi-floor { 0%,100%{ opacity: 0.5; transform: translateX(-50%) scaleX(1); } 50%{ opacity: 0.8; transform: translateX(-50%) scaleX(1.1); } }
+                          .fi-title { background: linear-gradient(90deg,#5b9bff,#a78bfa,#f472b6,#fbbf24,#5b9bff); background-size: 220% auto; -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent; animation: fi-shine 6s linear infinite; filter: drop-shadow(0 4px 24px rgba(91,155,255,0.28)); }
+                          .fi-aurora { position: absolute; border-radius: 50%; filter: blur(60px); pointer-events: none; animation: fi-aurora var(--adur) ease-in-out infinite; animation-delay: var(--adl); }
+                          .fi-cta { animation: fi-cta 2.6s ease-in-out infinite; }
+                          .fi-sheen { animation: fi-sheen 4.2s ease-in-out infinite; }
+                          .fi-floor { animation: fi-floor 7s ease-in-out infinite; }
+                          @media (prefers-reduced-motion: reduce) {
+                            .fi-cta, .fi-sheen, .fi-floor, .fi-aurora, .fi-title { animation: none; }
+                          }
+                        `}</style>
+
+                        {/* Aurora backdrop stays behind the leaderboard too, so both views read as one screen */}
+                            <div className="fi-aurora" style={{ top: '-14%', left: '-16%', width: 360, height: 360, background: 'radial-gradient(circle, rgba(37,99,235,0.5), transparent 68%)', ['--adur' as string]: '14s', ['--adl' as string]: '0s' }} />
+                            <div className="fi-aurora" style={{ bottom: '-12%', right: '-18%', width: 380, height: 380, background: 'radial-gradient(circle, rgba(239,65,53,0.42), transparent 68%)', ['--adur' as string]: '17s', ['--adl' as string]: '2s' }} />
+                            <div className="fi-aurora" style={{ top: '30%', right: '8%', width: 260, height: 260, background: 'radial-gradient(circle, rgba(167,139,250,0.4), transparent 68%)', ['--adur' as string]: '20s', ['--adl' as string]: '1s' }} />
+                            <div className="fi-aurora" style={{ bottom: '18%', left: '6%', width: 240, height: 240, background: 'radial-gradient(circle, rgba(34,197,94,0.32), transparent 68%)', ['--adur' as string]: '16s', ['--adl' as string]: '3s' }} />
+                            <div className="fi-floor pointer-events-none absolute left-1/2 bottom-[4%] w-[78%] h-28 rounded-[50%] blur-2xl" style={{ background: 'radial-gradient(closest-side, rgba(91,155,255,0.28), rgba(91,155,255,0))' }} />
+                            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-32 z-[2]" style={{ background: 'linear-gradient(to top, #05070d 6%, rgba(5,7,13,0.72) 42%, rgba(5,7,13,0) 100%)' }} />
+                        {!showScoreboard && (
+                            <button
+                              onClick={() => { audio.playClick(); trackButtonClick('Score'); setShowScoreboard(true); }}
+                              onMouseEnter={() => audio.playHover()}
+                              aria-label="Leaderboard"
+                              className="absolute top-4 right-4 lg:top-6 lg:right-6 z-20 w-11 h-11 rounded-full border border-white/15 bg-white/[0.06] text-white flex items-center justify-center hover:bg-white/[0.12] active:scale-95 transition-all"
+                            >
+                              <Trophy size={20} />
+                            </button>
+                        )}
+
+                        {showScoreboard ? (
+                          <div className="flex flex-col w-full max-w-2xl z-10 h-full">
+                            <div className="flex justify-between items-center mb-6">
+                              <div className="flex items-center gap-3">
+                                <Trophy className="text-white shrink-0" size={24} />
+                                <div className="flex flex-col">
+                                  <h2 className="fi-title text-3xl font-semibold tracking-tight leading-none">Leaderboard</h2>
+                                  <span className="text-[10px] uppercase tracking-[0.2em] font-black text-white/40 mt-1">
+                                    {flagTotalPlayers > 0 ? `${flagTotalPlayers} played today` : 'Global rankings'}
+                                  </span>
+                                </div>
+                              </div>
+                              <button onClick={() => { audio.playClick(); setShowScoreboard(false); }} className="shrink-0 text-white hover:opacity-70 transition-opacity font-bold uppercase text-xs tracking-widest">
+                                Close
+                              </button>
+                            </div>
+
+                            <div className="flex justify-center mb-5">
+                              <div className="flex gap-6">
+                                {(['today', 'stats'] as const).map(v => (
+                                  <button
+                                    key={v}
+                                    onClick={() => { audio.playClick(); setLeaderboardView(v); }}
+                                    className={`text-[11px] font-bold uppercase tracking-widest pb-1 border-b-2 transition-colors ${
+                                      leaderboardView === v
+                                        ? 'text-white border-current'
+                                        : 'text-white/40 hover:text-white border-transparent'
+                                    }`}
+                                  >
+                                    {v === 'today' ? 'Today' : 'My Stats'}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            {leaderboardView === 'stats' ? (
+                              <FlagStatsPanel stats={flagStats} playerName={playerName} onRename={renameMyScores} />
+                            ) : (
+                              <>
+                                {flagLeaderboard.length > 0 && (
+                                  (() => {
+                                    const myIds = getMyUserIds();
+                                    const myIndex = flagLeaderboard.findIndex(r => myIds.includes(r.userId));
+                                    const myRank = myIndex >= 0 ? myIndex + 1 : null;
+                                    return myRank !== null ? (
+                                      <div className="mb-3 flex justify-between items-center px-6 py-4 rounded-2xl border border-white/20 bg-white/[0.09] font-bold text-sm text-white">
+                                        <span>#{myRank} · You</span>
+                                        <span className="font-black">{Math.round(flagLeaderboard[myIndex].score)}<span className="text-white/30 text-xs font-bold">/100</span></span>
+                                      </div>
+                                    ) : (
+                                      <button
+                                        onClick={() => {
+                                          audio.playClick();
+                                          setShowScoreboard(false);
+                                          trackButtonClick('FlagDaily');
+                                          if (!hasPlayedFlagToday) trackGameStart('Flag - Daily');
+                                          setShowFlagGame(true);
+                                        }}
+                                        className="mb-3 w-full px-6 py-4 rounded-2xl border border-white/20 bg-white/[0.09] text-center text-xs font-bold uppercase tracking-widest text-white hover:bg-white/[0.14] active:scale-[0.98] transition-all"
+                                      >
+                                        Play today's flags to claim your rank
+                                      </button>
+                                    );
+                                  })()
+                                )}
+
+                                <div className="space-y-3 overflow-y-auto max-h-[58vh] pr-2">
+                                  {flagLeaderboard.length > 0 ? flagLeaderboard.map((entry, i) => (
+                                    <div
+                                      key={entry.id}
+                                      className={`flex justify-between items-center px-6 py-5 rounded-2xl border transition-colors ${i === 0 ? 'bg-white/[0.09] border-white/20' : 'bg-white/[0.05] border-white/10 hover:bg-white/[0.08]'}`}
+                                    >
+                                      <div className="flex items-center gap-5 min-w-0">
+                                        <span
+                                          className="font-bold text-lg tabular-nums w-6 shrink-0"
+                                          style={{ color: MEDAL_HEX[i] ?? 'rgba(255,255,255,0.35)' }}
+                                        >
+                                          {i + 1}
+                                        </span>
+                                        <span className="font-bold text-lg text-white truncate">{entry.name}</span>
+                                      </div>
+                                      <span className="font-black text-lg text-[#dfe8f6] tabular-nums shrink-0">
+                                        {Math.round(entry.score)}
+                                        <span className="text-white/30 text-sm">/100</span>
+                                      </span>
+                                    </div>
+                                  )) : (
+                                    <div className="py-20 font-mono text-[11px] uppercase tracking-[0.2em] text-white/40 text-center">
+                                      No scores yet — be the first
+                                    </div>
+                                  )}
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="flex flex-col lg:flex-row h-full items-center justify-start lg:justify-center w-full max-w-2xl gap-4 lg:gap-6 relative z-10 pt-10 sm:pt-0">
+
+                            {flagIntroLayout === 'current' ? (
+                              <>
+                                {/* display:contents on mobile so the ring can sit between the copy and the CTA */}
+                                <div className="contents lg:flex lg:flex-col lg:flex-1 lg:min-w-0 lg:items-start lg:justify-center lg:gap-7">
+                                  <motion.div
+                                    initial={{ opacity: 0, y: 20 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{ delay: 0.2, duration: 0.8 }}
+                                    className="order-1 w-full text-center lg:text-left shrink-0"
+                                  >
+                                    <h1 className="fi-title text-4xl sm:text-5xl font-black tracking-tighter leading-none">
+                                      Flag ColorGuessr
+                                    </h1>
+                                    <p className="mt-3 text-sm sm:text-base font-semibold text-[#9fb0c4]">
+                                      One color is wrong — spot it &amp; fix it
+                                    </p>
+                                  </motion.div>
+
+                                  <motion.div
+                                    initial={{ opacity: 0, y: 20 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    transition={{ delay: 0.4, duration: 0.8 }}
+                                    className="fi-cta order-3 shrink-0 w-48 relative z-10 p-[5px] rounded-[1.2rem] overflow-hidden hover:scale-[1.03] active:scale-95 transition-all duration-300 group/rainbow"
+                                  >
+                                    <div className="absolute inset-[-500%] bg-[conic-gradient(from_0deg,#ff4545,#f2f245,#45f245,#45f2f2,#4545f2,#f245f2,#ff4545)] animate-spin-slow opacity-40 group-hover/rainbow:opacity-100 transition-opacity" />
+                                    <button
+                                      onClick={() => {
+                                        audio.playClick();
+                                        trackButtonClick('FlagDaily');
+                                        if (!hasPlayedFlagToday) trackGameStart('Flag - Daily');
+                                        setShowFlagGame(true);
+                                      }}
+                                      onMouseEnter={() => audio.playHover()}
+                                      className="relative z-10 w-full py-4 bg-white text-black font-black rounded-2xl flex items-center justify-center text-lg sm:text-xl transition-colors duration-300 overflow-hidden"
+                                    >
+                                      Daily
+                                      <span className="fi-sheen pointer-events-none absolute inset-y-0 -left-1/3 w-1/3 bg-gradient-to-r from-transparent via-white/70 to-transparent mix-blend-overlay" />
+                                    </button>
+                                  </motion.div>
+                                </div>
+
+                                <div className="order-2 shrink-0">
+                                  <FlagIntroRing />
+                                </div>
+                              </>
+                            ) : flagIntroLayout === 'split' ? (
+                              <FlagSplitHero
+                                playersToday={flagTotalPlayers}
+                                onPlay={() => {
+                                  audio.playClick();
+                                  trackButtonClick('FlagDaily');
+                                  if (!hasPlayedFlagToday) trackGameStart('Flag - Daily');
+                                  setShowFlagGame(true);
+                                }}
+                              />
+                            ) : flagIntroLayout === 'deck' ? (
+                              <FlagDeckHero
+                                playersToday={flagTotalPlayers}
+                                onPlay={() => {
+                                  audio.playClick();
+                                  trackButtonClick('FlagDaily');
+                                  if (!hasPlayedFlagToday) trackGameStart('Flag - Daily');
+                                  setShowFlagGame(true);
+                                }}
+                              />
+                            ) : (
+                              <FlagDemoHero
+                                playersToday={flagTotalPlayers}
+                                onPlay={() => {
+                                  audio.playClick();
+                                  trackButtonClick('FlagDaily');
+                                  if (!hasPlayedFlagToday) trackGameStart('Flag - Daily');
+                                  setShowFlagGame(true);
+                                }}
+                              />
+                            )}
+                          </div>
+                        )}
+                      </motion.div>
                     )}
                   </AnimatePresence>
+                  )}
 
                   {/* Splash Particles Overlay */}
                   <SplashParticles triggerKey={splashTrigger} />
@@ -1382,7 +1699,7 @@ export default function App() {
                   className={`w-full h-full fixed inset-0 lg:relative lg:w-[90vw] lg:max-w-[750px] lg:h-[65vh] lg:min-h-[450px] lg:max-h-[550px] bg-black backdrop-blur-2xl flex flex-col items-center justify-center shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] lg:rounded-[2.5rem] overflow-hidden pointer-events-auto border border-white/10`}
                 >
                   {/* Round Info: Top Left */}
-                  <div className="absolute top-6 left-6 text-white text-xs tracking-widest uppercase">
+                  <div className="absolute top-16 sm:top-6 left-6 text-white text-xs tracking-widest uppercase">
                     {round}/4
                   </div>
 
@@ -1479,7 +1796,7 @@ export default function App() {
                   </div>
 
                   {/* Round Info */}
-                  <div className="absolute top-2 sm:top-6 left-32 sm:left-32 md:left-40 text-white text-xs tracking-widest uppercase z-20 pointer-events-none">
+                  <div className="absolute top-16 sm:top-6 left-32 sm:left-32 md:left-40 text-white text-xs tracking-widest uppercase z-20 pointer-events-none">
                     {round}/4
                   </div>
 
@@ -1580,7 +1897,7 @@ export default function App() {
                 className="relative w-[90vw] max-w-[750px] h-[65vh] min-h-[450px] max-h-[550px] bg-black backdrop-blur-2xl flex flex-col items-center justify-center shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] rounded-[2.5rem] overflow-hidden pointer-events-auto border border-white/10 p-8 md:p-12"
               >
                 {/* Round Info: Top Left */}
-                <div className="absolute top-6 left-6 text-white text-xs tracking-widest uppercase z-20">
+                <div className="absolute top-16 sm:top-6 left-6 text-white text-xs tracking-widest uppercase z-20">
                   {round}/4
                 </div>
 
@@ -1650,7 +1967,7 @@ export default function App() {
                 animate={{ opacity: 1, scale: 1, rotate: 0 }}
                 exit={{ opacity: 0, scale: 1.1, rotate: 2 }}
                 transition={{ type: "spring", damping: 20, stiffness: 100 }}
-                className="w-full h-full fixed inset-0 lg:relative lg:w-[90vw] lg:max-w-[750px] lg:h-auto lg:min-h-[450px] bg-black backdrop-blur-2xl flex flex-col items-center justify-center shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] lg:rounded-[2.5rem] overflow-hidden pointer-events-auto border border-white/10 py-12 px-6 md:px-12"
+                className="w-full h-full fixed inset-0 overflow-y-auto lg:relative lg:w-[90vw] lg:max-w-[750px] lg:h-auto lg:min-h-[450px] lg:overflow-hidden bg-black backdrop-blur-2xl flex flex-col items-center justify-center shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] lg:rounded-[2.5rem] pointer-events-auto border border-white/10 py-12 px-6 md:px-12"
               >
                 <button
                   onClick={() => { audio.playClick(); setGameState('start'); }}
@@ -1736,8 +2053,8 @@ export default function App() {
                 </div>
 
                 <div className="flex flex-col gap-3 w-full max-w-sm mt-4">
-                  {/* Row 1: Name Input and Post Button (QuickPlay Only) */}
-                  {(gameMode === 'solo' || gameMode === 'duo-quickplay') && (
+                  {/* Daily auto-posts on finish, so its name entry is optional and only renames the existing row. */}
+                  <div className="flex flex-col gap-1.5 w-full">
                     <div className="flex gap-2 w-full items-center">
                       <div className="relative group flex-1">
                         <div className="absolute left-3 top-1/2 -translate-y-1/2 text-white/30 group-focus-within:text-white transition-colors">
@@ -1745,7 +2062,7 @@ export default function App() {
                         </div>
                         <input
                           type="text"
-                          placeholder="Enter your name"
+                          placeholder={isDailyMode ? 'Enter your name (optional)' : 'Enter your name'}
                           value={playerName}
                           onChange={(e) => setPlayerName(e.target.value.slice(0, 20))}
                           className="w-full bg-white/5 border border-white/10 rounded-2xl py-3 pl-10 pr-4 text-white placeholder:text-white/20 focus:outline-none focus:border-white/30 transition-all font-bold"
@@ -1762,12 +2079,12 @@ export default function App() {
                         ) : (
                           <>
                             <Send size={18} className="group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
-                            Post
+                            {isDailyMode ? 'Save' : 'Post'}
                           </>
                         )}
                       </button>
                     </div>
-                  )}
+                  </div>
 
                   {/* Row 2: Share and Play Again Buttons */}
                   <div className="flex gap-2 w-full">
@@ -1796,12 +2113,6 @@ export default function App() {
                     ) : null}
                   </div>
                 </div>
-
-                {(gameMode === 'daily' || gameMode === 'duo') && (
-                  <p className="text-white/40 text-[10px] tracking-widest uppercase mt-4 text-center font-bold">
-                    Come back tomorrow for a new exhibition.
-                  </p>
-                )}
 
                 {/* Cross Promotion / Return Button */}
                 <button
