@@ -7,3 +7,6 @@ coverage/
 .env*
 !.env.example
 "tsconfig.tsbuildinfo" 
+
+# crest build cache (re-downloadable source SVGs)
+.crest-cache/
