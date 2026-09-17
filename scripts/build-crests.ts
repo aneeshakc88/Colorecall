@@ -11,7 +11,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import sharp from 'sharp';
-import { optimize } from 'svgo';
+import { optimize, type Config } from 'svgo';
 import { regionOutlineRaster, type Raster } from '../src/flag/flag-highlight';
 
 const REPO = 'FCLOGO/fclogo.top';
@@ -20,11 +20,26 @@ const CACHE = join(process.cwd(), '.crest-cache');
 const ART_BOTTOM = 755;   // crop height — clips the wordmark, clears the deepest art by 6px
 const MAX_BYTES = 15_000;
 const COVERAGE_FLOOR = 0.08;
+// Share of a region's own area a traced loop must reach to be drawn — see
+// OutlineOpts.minLoopFrac. Must match the value the game renders with
+// (CrestGame.tsx), or the build would accept rings the game never draws.
+const MIN_LOOP_FRAC = 0.06;
+// Even after MIN_LOOP_FRAC prunes the confetti, a colour that exists only as thin
+// outlines all over the badge still traces a dozen separate loops, and a dozen rings
+// reads as static rather than "this area is wrong". Regions past this are not puzzles.
+const MAX_LOOPS = 8;
+// Two regions this close in Lab are the same colour to the eye, so they would deal two
+// rounds on one club with the same answer (Monza ships #E4032E and #E4062F, dE 0.5).
+// The higher-coverage one wins, since `cands` is already sorted by coverage.
+const MIN_REGION_DE = 10;
 const MEASURE_W = 400;
 
 // Duds pulled from the Crest Round Gauntlet review: regions whose marching-ants
 // outline is unreadable as a puzzle. Club-level entries drop the badge entirely.
-const DUD_CLUBS = new Set(['RFEF-c-rdoba']);
+// FIGC-napoli: the upstream file declares only #000035 — Napoli's sky blue is simply
+// absent, so the badge renders as a navy outline and the round would ask for navy on
+// the one club everyone pictures in sky blue.
+const DUD_CLUBS = new Set(['RFEF-c-rdoba', 'FIGC-napoli']);
 const DUD_REGIONS = new Set([
   'RFEF-eldense #FFFFFF',
   'RFEF-fc-andorra #FF0B10',
@@ -113,6 +128,23 @@ const up = (hex: string) => {
   const full = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
   return '#' + full.toUpperCase();
 };
+
+function labOf(hex: string): [number, number, number] {
+  const [r, g, b] = [1, 3, 5].map(i => {
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+    return c > 0.04045 ? Math.pow((c + 0.055) / 1.055, 2.4) : c / 12.92;
+  }) as [number, number, number];
+  const x = (r * 0.4124 + g * 0.3576 + b * 0.1805) / 0.95047;
+  const y = r * 0.2126 + g * 0.7152 + b * 0.0722;
+  const z = (r * 0.0193 + g * 0.1192 + b * 0.9505) / 1.08883;
+  const f = (t: number) => t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116;
+  return [116 * f(y) - 16, 500 * (f(x) - f(y)), 200 * (f(y) - f(z))];
+}
+
+function deltaE(a: string, b: string): number {
+  const p = labOf(a), q = labOf(b);
+  return Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);
+}
 
 // style="fill: #abc; stroke: #def" → fill="#AABBCC" stroke="#DDEEFF", leaving any
 // other declaration in place. Also crops the canvas past the FCLOGO wordmark.
@@ -245,7 +277,7 @@ async function main() {
   const picked = await listTree();
   console.log(`${picked.length} Big-5 clubs with a clean version file`);
 
-  const skipped: Record<string, string[]> = { gradient: [], image: [], tooBig: [], noRegion: [], noRing: [] };
+  const skipped: Record<string, string[]> = { gradient: [], image: [], tooBig: [], noRegion: [], noRing: [], fragmented: [], twinColour: [] };
   const rows: { name: string; code: string; svg: string; hideable: { hex: string; coverage: number }[] }[] = [];
 
   for (const p of picked) {
@@ -260,8 +292,16 @@ async function main() {
     if (/url\(#/.test(raw)) { skipped.gradient!.push(name); continue; }
 
     let svg = normalize(raw);
-    svg = optimize(svg, { multipass: true, floatPrecision: 1, plugins: ['preset-default'] }).data;
-    svg = optimize(svg, { multipass: true, floatPrecision: 1, plugins: ['preset-default'] }).data;
+    // convertColors defaults to shortening #FF0000 to the keyword `red`, which the
+    // hex scan below cannot see — the region then vanishes from `hideable` and every
+    // other region's coverage is measured against a short colour list. Force the
+    // traffic the other way: keywords in, hex out.
+    const svgoOpts: Config = {
+      multipass: true, floatPrecision: 1,
+      plugins: [{ name: 'preset-default', params: { overrides: { convertColors: { names2hex: true, shortname: false } } } }],
+    };
+    svg = optimize(svg, svgoOpts).data;
+    svg = optimize(svg, svgoOpts).data;
     // After optimizing, not before: SVGO's removeUselessStrokeAndFill strips an
     // explicit black fill right back off, since black is the default it encodes.
     svg = stampDefaultFills(svg);
@@ -279,14 +319,21 @@ async function main() {
       .sort((a, b) => (cov[b] ?? 0) - (cov[a] ?? 0));
     if (!cands.length) { skipped.noRegion!.push(name); continue; }
 
-    // A region can clear the coverage floor and still trace to nothing when the
-    // 0.1%-area floor in the tracer eats a fragmented shape — drop those, or the
-    // round would render with no marching-ants ring at all.
+    // A region can clear the coverage floor and still trace to nothing: the tracer's
+    // floors eat antialias specks, and MIN_LOOP_FRAC eats a region that is nothing but
+    // confetti (a colour that exists only as wordmark letters). Either way the round
+    // would render with no marching-ants ring, so drop it.
     const hideable: { hex: string; coverage: number }[] = [];
     for (const hex of cands) {
       if (DUD_REGIONS.has(`${code} ${hex}`)) continue;
-      const ring = await regionOutlineRaster(svg, hex, rasterize);
-      if (ring) hideable.push({ hex, coverage: +(cov[hex] ?? 0).toFixed(3) });
+      const ring = await regionOutlineRaster(svg, hex, rasterize, undefined, { minLoopFrac: MIN_LOOP_FRAC });
+      // antsPaths emits the same `d` twice (dark base + offset white), so each traced
+      // loop contributes two M commands.
+      const loops = (ring.match(/M/g) ?? []).length / 2;
+      const twin = hideable.find(h => deltaE(h.hex, hex) < MIN_REGION_DE);
+      if (twin) { skipped.twinColour!.push(`${name}:${hex}~${twin.hex}`); continue; }
+      if (ring && loops <= MAX_LOOPS) hideable.push({ hex, coverage: +(cov[hex] ?? 0).toFixed(3) });
+      else if (ring) skipped.fragmented!.push(`${name}:${hex}(${loops})`);
       else skipped.noRing!.push(`${name}:${hex}`);
     }
     if (!hideable.length) { skipped.noRegion!.push(name); continue; }

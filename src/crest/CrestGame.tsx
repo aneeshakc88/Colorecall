@@ -35,6 +35,11 @@ function getRoundMsg(score: number): string {
 
 // ── marching ants: every badge is curved, so the raster tracer always runs ──
 
+// Must match MIN_LOOP_FRAC in scripts/build-crests.ts — the build only keeps regions
+// that trace a ring at this setting, so rendering at a different one would either
+// show confetti the build vetted out or nothing at all.
+const CREST_MIN_LOOP_FRAC = 0.06;
+
 async function rasterizeSvg(svg: string, width: number): Promise<Raster> {
   const height = Math.max(2, Math.round(width / viewBoxRatio(svg)));
   const sized = svg.replace(/^<svg/, `<svg width="${width}" height="${height}"`);
@@ -63,7 +68,7 @@ function useRegionOutline(svg: string | undefined, hex: string): string | null {
   useEffect(() => {
     if (!svg) return;
     let live = true;
-    regionOutlineRaster(svg, hex, rasterizeSvg)
+    regionOutlineRaster(svg, hex, rasterizeSvg, undefined, { minLoopFrac: CREST_MIN_LOOP_FRAC })
       .then((o) => { if (live) setRastered({ key, overlay: o }); })
       .catch(() => {});
     return () => { live = false; };

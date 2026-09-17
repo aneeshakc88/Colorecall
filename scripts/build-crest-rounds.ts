@@ -83,7 +83,9 @@ async function main() {
   for (let ci = 0; ci < CRESTS_DATA.length; ci++) {
     const club = CRESTS_DATA[ci]!;
     for (const region of club.hideable) {
-      const ants = await regionOutlineRaster(club.svg, region.hex, rasterize);
+      // Same floor the build vetted with and the game renders with, or the review
+      // page would show ants nobody ever sees (see MIN_LOOP_FRAC in build-crests.ts).
+      const ants = await regionOutlineRaster(club.svg, region.hex, rasterize, undefined, { minLoopFrac: 0.06 });
       if (!ants) empty++;
       rounds.push({ c: ci, hex: region.hex, wrong: makeWrongHex(region.hex, rand), cov: region.coverage, ants });
     }
