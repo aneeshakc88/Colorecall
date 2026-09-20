@@ -281,7 +281,16 @@ export type Rasterize = (svg: string, width: number) => Promise<Raster>;
 
 const RASTER_W = 512;
 
-export async function regionOutlineRaster(svg: string, hex: string, rasterize: Rasterize, idx?: number[]): Promise<string> {
+export type OutlineOpts = {
+  // Share of the region's OWN area a traced loop must reach to be drawn. Club badges
+  // scatter a colour across wordmark letters, filigree and ball panels; ringing every
+  // fragment reads as static rather than "this area is wrong", so the crest build and
+  // the crest game both ask for a floor here. Flags pass nothing and keep the
+  // canvas-relative floor alone, which their large simple regions want.
+  minLoopFrac?: number;
+};
+
+export async function regionOutlineRaster(svg: string, hex: string, rasterize: Rasterize, idx?: number[], opts?: OutlineOpts): Promise<string> {
   const target = hex.toUpperCase();
   if (!svg.toUpperCase().includes(target)) return '';
   const vb = parseViewBox(svg) ?? { x: 0, y: 0, w: 3, h: 2 };
@@ -294,7 +303,11 @@ export async function regionOutlineRaster(svg: string, hex: string, rasterize: R
   }
   closeMask(mask, W, H, Math.max(2, Math.round(W / 170)));
 
-  const minArea = W * H * 0.001; // drop antialias specks and sub-visible holes
+  let maskArea = 0;
+  for (let i = 0; i < mask.length; i++) maskArea += mask[i]!;
+  // Canvas-relative floor drops antialias specks and sub-visible holes; the optional
+  // region-relative floor drops the confetti described on OutlineOpts.minLoopFrac.
+  const minArea = Math.max(W * H * 0.001, maskArea * (opts?.minLoopFrac ?? 0));
   const sx = vb.w / W, sy = vb.h / H;
   let d = '';
   for (const loop of traceLoops(mask, W, H)) {

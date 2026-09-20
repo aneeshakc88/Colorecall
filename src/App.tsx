@@ -16,6 +16,11 @@ import { getCurrentCycle, getNextResetTime, cycleDateLabel } from './daily-cycle
 // in the tree but are reachable only via ?heroLab=1.
 const HERO_LAB = new URLSearchParams(window.location.search).has('heroLab');
 
+// Lazy so the 586KB club badge dataset stays out of the main bundle. The intro
+// hero renders the day's real badges, so it pulls the same chunk.
+const CrestGame = React.lazy(() => import('./crest/CrestGame'));
+const CrestSplitHero = React.lazy(() => import('./crest/CrestSplitHero').then(m => ({ default: m.CrestSplitHero })));
+
 const MEDAL_HEX = ['#fbbf24', '#cbd5e1', '#f0a868'];
 import { FlagDeckHero } from './flag/FlagDeckHero';
 import { FlagDemoHero } from './flag/FlagDemoHero';
@@ -381,6 +386,11 @@ export default function App() {
   const [hasPlayedDuoToday, setHasPlayedDuoToday] = useState(false);
   const [hasPlayedFlagToday, setHasPlayedFlagToday] = useState(false);
   const [showFlagGame, setShowFlagGame] = useState(false);
+  const [hasPlayedColorSportToday, setHasPlayedColorSportToday] = useState(false);
+  const [showCrestGame, setShowCrestGame] = useState(false);
+  const [colorSportLeaderboard, setColorSportLeaderboard] = useState<{ id: string; userId: string; name: string; score: number }[]>([]);
+  const [colorSportTotalPlayers, setColorSportTotalPlayers] = useState(0);
+  const [colorSportStats, setColorSportStats] = useState<MyStats | null>(null);
   const [flagLeaderboard, setFlagLeaderboard] = useState<{ id: string; userId: string; name: string; score: number }[]>([]);
   const [flagTotalPlayers, setFlagTotalPlayers] = useState(0);
   const [flagStats, setFlagStats] = useState<MyStats | null>(null);
@@ -404,11 +414,11 @@ export default function App() {
       default: return 'classic_daily_scores';
     }
   };
-  const ALL_SCORE_COLLECTIONS = ['classic_daily_scores', 'classic_quickplay_scores', 'duo_daily_scores', 'duo_quickplay_scores', 'flag_daily_scores'];
+  const ALL_SCORE_COLLECTIONS = ['classic_daily_scores', 'classic_quickplay_scores', 'duo_daily_scores', 'duo_quickplay_scores', 'flag_daily_scores', 'colorsport_daily_scores'];
   const [isHoveringQuickPlay, setIsHoveringQuickPlay] = useState(false);
   const [isHoveringDuo, setIsHoveringDuo] = useState(false);
   const [isHoveringScore, setIsHoveringScore] = useState(false);
-  const [gameEdition, setGameEdition] = useState<'duo' | 'classic' | 'flag'>('duo');
+  const [gameEdition, setGameEdition] = useState<'duo' | 'classic' | 'flag' | 'crest'>('duo');
   const [splashTrigger, setSplashTrigger] = useState(0);
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const isAdmin = user?.email === 'aneeshakc88@gmail.com';
@@ -596,6 +606,22 @@ export default function App() {
     }
   };
 
+  const fetchColorSportStats = async () => {
+    try {
+      const snap = await getDocs(query(
+        collection(db, 'colorsport_daily_scores'),
+        where('userId', 'in', getMyUserIds())
+      ));
+      const docs = snap.docs.map(d => ({
+        score: d.data().score as number,
+        createdAt: d.data().createdAt as Timestamp | null
+      }));
+      setColorSportStats(computeMyStats(docs));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.GET, 'colorsport_daily_scores');
+    }
+  };
+
   const renameMyScores = async (name: string) => {
     const trimmed = name.slice(0, 20).trim();
     if (!trimmed) return;
@@ -612,6 +638,7 @@ export default function App() {
       setPlayerName(trimmed);
       await fetchScores();
       if (gameEdition === 'flag') await fetchFlagScores();
+      if (gameEdition === 'crest') await fetchColorSportScores();
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, 'score_collections');
     }
@@ -649,6 +676,35 @@ export default function App() {
     if (gameEdition === 'flag') {
       fetchFlagScores();
       fetchFlagStats();
+    }
+  }, [showScoreboard, gameEdition]);
+
+  const fetchColorSportScores = async () => {
+    try {
+      const q = query(
+        collection(db, 'colorsport_daily_scores'),
+        where('isPosted', '==', true),
+        where('period', '==', getEffectiveCycle()),
+        orderBy('score', 'desc')
+      );
+      const querySnapshot = await getDocs(q);
+      const liveScores = querySnapshot.docs.map(doc => ({
+        id: doc.id,
+        userId: (doc.data().userId as string) || '',
+        name: doc.data().name || 'Anonymous',
+        score: doc.data().score,
+      }));
+      setColorSportTotalPlayers(liveScores.length);
+      setColorSportLeaderboard(liveScores);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.GET, 'colorsport_daily_scores');
+    }
+  };
+
+  useEffect(() => {
+    if (gameEdition === 'crest') {
+      fetchColorSportScores();
+      fetchColorSportStats();
     }
   }, [showScoreboard, gameEdition]);
 
@@ -855,6 +911,16 @@ export default function App() {
         console.error("Failed to parse saved flag state");
       }
     }
+
+    const savedColorSportState = localStorage.getItem('colorsport_daily_state');
+    if (savedColorSportState) {
+      try {
+        const parsedColorSport = JSON.parse(savedColorSportState);
+        setHasPlayedColorSportToday(parsedColorSport.cycleId === currentCycle && !!parsedColorSport.completed);
+      } catch (e) {
+        console.error("Failed to parse saved Color-sport state");
+      }
+    }
   }, [cycleOffset]);
 
   useEffect(() => {
@@ -1011,11 +1077,12 @@ export default function App() {
     <div className="min-h-[100dvh] w-full flex flex-col bg-white text-zinc-900 font-sans overflow-y-auto overflow-x-hidden relative selection:bg-black selection:text-white select-none">
 
       {/* Top Left Mode Tabs — hidden on mobile once a round starts (overlaps game UI); always shown from sm breakpoint up */}
-      <div className={`fixed top-4 left-4 sm:top-6 sm:left-6 z-50 items-center gap-0.5 sm:gap-1 pointer-events-auto bg-white/95 backdrop-blur-md border border-zinc-200 rounded-full pl-1 pr-1.5 py-1.5 sm:pl-1.5 sm:pr-2 sm:py-2 shadow-xl ${(gameState === 'start' && !showScoreboard && !showFlagGame) ? 'flex' : 'hidden sm:flex'}`}>
+      <div className={`fixed top-4 left-4 sm:top-6 sm:left-6 z-50 items-center gap-0.5 sm:gap-1 pointer-events-auto bg-white/95 backdrop-blur-md border border-zinc-200 rounded-full pl-1 pr-1.5 py-1.5 sm:pl-1.5 sm:pr-2 sm:py-2 shadow-xl ${(gameState === 'start' && !showScoreboard && !showFlagGame && !showCrestGame) ? 'flex' : 'hidden sm:flex'}`}>
           {([
             { key: 'duo' as const, label: 'Duo', played: hasPlayedDuoToday },
             { key: 'classic' as const, label: 'Classic', played: hasPlayedToday },
             { key: 'flag' as const, label: 'Flag', played: hasPlayedFlagToday },
+            { key: 'crest' as const, label: 'Color-sport', played: hasPlayedColorSportToday },
           ]).map(({ key, label, played }) => {
             const active = gameEdition === key;
             return (
@@ -1027,6 +1094,7 @@ export default function App() {
                   setSplashTrigger(prev => prev + 1);
                   // Switching mid-round abandons it — no score is saved.
                   setShowFlagGame(false);
+                  setShowCrestGame(false);
                   setShowScoreboard(false);
                   setGameState('start');
                   setTotalScore(0);
@@ -1086,7 +1154,22 @@ export default function App() {
             <AnimatePresence mode="wait">
               {gameState === 'start' && (
                 <div className="relative w-full h-full lg:w-[90vw] lg:max-w-[750px] lg:h-[65vh] lg:min-h-[450px] lg:max-h-[550px] flex items-center justify-center pointer-events-none">
-                  {gameEdition === 'flag' && showFlagGame ? (
+                  {gameEdition === 'crest' && showCrestGame ? (
+                    <React.Suspense fallback={<div className="text-white/50 text-[10px] tracking-[0.2em] uppercase font-bold">Loading badges…</div>}>
+                      <CrestGame
+                        hasPlayedToday={hasPlayedColorSportToday}
+                        playerName={playerName}
+                        onPlayedToday={() => setHasPlayedColorSportToday(true)}
+                        onExit={() => setShowCrestGame(false)}
+                        onReturnHome={() => {
+                          setShowCrestGame(false);
+                          audio.playTransition('splash');
+                          setSplashTrigger(prev => prev + 1);
+                          setGameEdition('duo');
+                        }}
+                      />
+                    </React.Suspense>
+                  ) : gameEdition === 'flag' && showFlagGame ? (
                     <FlagGame
                       hasPlayedToday={hasPlayedFlagToday}
                       playerName={playerName}
@@ -1370,6 +1453,142 @@ export default function App() {
                                 </button>
                               </div>
                             </motion.div>
+                          </div>
+                        )}
+                      </motion.div>
+                    ) : gameEdition === 'crest' ? (
+                      <motion.div
+                        key="crest-screen"
+                        initial={{ clipPath: 'circle(0% at 50% 100%)', scale: 0.8, y: 50 }}
+                        animate={{ clipPath: 'circle(150% at 50% 100%)', scale: 1, y: 0 }}
+                        exit={{ clipPath: 'circle(0% at 50% 100%)', scale: 1.1, y: -50, zIndex: 10 }}
+                        transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
+                        className="w-full h-full fixed inset-0 lg:relative lg:w-[90vw] lg:max-w-[750px] lg:h-[65vh] lg:min-h-[450px] lg:max-h-[550px] lg:rounded-[2.5rem] shadow-2xl flex flex-col items-center justify-center p-6 lg:p-10 overflow-hidden pointer-events-auto border border-zinc-800"
+                        style={{
+                          transformStyle: 'preserve-3d',
+                          background: 'radial-gradient(120% 90% at 50% 0%, #123a28 0%, #08180f 58%, #030705 100%)',
+                        }}
+                      >
+                        {!showScoreboard && (
+                          <button
+                            onClick={() => { audio.playClick(); trackButtonClick('Score'); setShowScoreboard(true); }}
+                            onMouseEnter={() => audio.playHover()}
+                            aria-label="Leaderboard"
+                            className="absolute top-4 right-4 lg:top-6 lg:right-6 z-20 w-11 h-11 rounded-full border border-white/15 bg-white/[0.06] text-white flex items-center justify-center hover:bg-white/[0.12] active:scale-95 transition-all"
+                          >
+                            <Trophy size={20} />
+                          </button>
+                        )}
+
+                        {showScoreboard ? (
+                          <div className="flex flex-col w-full max-w-2xl z-10 h-full">
+                            <div className="flex justify-between items-center mb-6">
+                              <div className="flex items-center gap-3">
+                                <Trophy className="text-white shrink-0" size={24} />
+                                <div className="flex flex-col">
+                                  <h2 className="text-3xl font-semibold tracking-tight leading-none text-white">Leaderboard</h2>
+                                  <span className="text-[10px] uppercase tracking-[0.2em] font-black text-white/40 mt-1">
+                                    {colorSportTotalPlayers > 0 ? `${colorSportTotalPlayers} played today` : 'Global rankings'}
+                                  </span>
+                                </div>
+                              </div>
+                              <button onClick={() => { audio.playClick(); setShowScoreboard(false); }} className="shrink-0 text-white hover:opacity-70 transition-opacity font-bold uppercase text-xs tracking-widest">
+                                Close
+                              </button>
+                            </div>
+
+                            <div className="flex justify-center mb-5">
+                              <div className="flex gap-6">
+                                {(['today', 'stats'] as const).map(v => (
+                                  <button
+                                    key={v}
+                                    onClick={() => { audio.playClick(); setLeaderboardView(v); }}
+                                    className={`text-[11px] font-bold uppercase tracking-widest pb-1 border-b-2 transition-colors ${
+                                      leaderboardView === v
+                                        ? 'text-white border-current'
+                                        : 'text-white/40 hover:text-white border-transparent'
+                                    }`}
+                                  >
+                                    {v === 'today' ? 'Today' : 'My Stats'}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            {leaderboardView === 'stats' ? (
+                              <FlagStatsPanel stats={colorSportStats} playerName={playerName} onRename={renameMyScores} />
+                            ) : (
+                              <>
+                                {colorSportLeaderboard.length > 0 && (
+                                  (() => {
+                                    const myIds = getMyUserIds();
+                                    const myIndex = colorSportLeaderboard.findIndex(r => myIds.includes(r.userId));
+                                    const myRank = myIndex >= 0 ? myIndex + 1 : null;
+                                    return myRank !== null ? (
+                                      <div className="mb-3 flex justify-between items-center px-6 py-4 rounded-2xl border border-white/20 bg-white/[0.09] font-bold text-sm text-white">
+                                        <span>#{myRank} &middot; You</span>
+                                        <span className="font-black">{Math.round(colorSportLeaderboard[myIndex].score)}<span className="text-white/30 text-xs font-bold">/100</span></span>
+                                      </div>
+                                    ) : (
+                                      <button
+                                        onClick={() => {
+                                          audio.playClick();
+                                          setShowScoreboard(false);
+                                          trackButtonClick('ColorSportDaily');
+                                          if (!hasPlayedColorSportToday) trackGameStart('Color-sport - Daily');
+                                          setShowCrestGame(true);
+                                        }}
+                                        className="mb-3 w-full px-6 py-4 rounded-2xl border border-white/20 bg-white/[0.09] text-center text-xs font-bold uppercase tracking-widest text-white hover:bg-white/[0.14] active:scale-[0.98] transition-all"
+                                      >
+                                        Play the daily badges to claim your rank
+                                      </button>
+                                    );
+                                  })()
+                                )}
+
+                                <div className="space-y-3 overflow-y-auto max-h-[58vh] pr-2">
+                                  {colorSportLeaderboard.length > 0 ? colorSportLeaderboard.map((entry, i) => (
+                                    <div
+                                      key={entry.id}
+                                      className={`flex justify-between items-center px-6 py-5 rounded-2xl border transition-colors ${i === 0 ? 'bg-white/[0.09] border-white/20' : 'bg-white/[0.05] border-white/10 hover:bg-white/[0.08]'}`}
+                                    >
+                                      <div className="flex items-center gap-5 min-w-0">
+                                        <span
+                                          className="font-bold text-lg tabular-nums w-6 shrink-0"
+                                          style={{ color: MEDAL_HEX[i] ?? 'rgba(255,255,255,0.35)' }}
+                                        >
+                                          {i + 1}
+                                        </span>
+                                        <span className="font-bold text-lg text-white truncate">{entry.name}</span>
+                                      </div>
+                                      <span className="font-black text-lg text-[#c9f2dd] tabular-nums shrink-0">
+                                        {Math.round(entry.score)}
+                                        <span className="text-white/30 text-sm">/100</span>
+                                      </span>
+                                    </div>
+                                  )) : (
+                                    <div className="py-20 font-mono text-[11px] uppercase tracking-[0.2em] text-white/40 text-center">
+                                      No scores yet &mdash; be the first
+                                    </div>
+                                  )}
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="flex flex-col h-full items-center justify-center w-full max-w-2xl relative z-10">
+                            <React.Suspense fallback={<div className="text-white/40 text-[10px] tracking-[0.2em] uppercase font-bold">Loading badges…</div>}>
+                              <CrestSplitHero
+                                playersToday={colorSportTotalPlayers}
+                                playedToday={hasPlayedColorSportToday}
+                                onPlay={() => {
+                                  audio.playClick();
+                                  trackButtonClick('ColorSportDaily');
+                                  if (!hasPlayedColorSportToday) trackGameStart('Color-sport - Daily');
+                                  setShowCrestGame(true);
+                                }}
+                              />
+                            </React.Suspense>
                           </div>
                         )}
                       </motion.div>

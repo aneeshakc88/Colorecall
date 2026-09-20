@@ -51,7 +51,7 @@ function hslToHex(h: number, s: number, l: number): string {
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 // Produce a plausible-but-clearly-wrong colour for the hidden region.
-function makeWrongHex(hex: string, rand: () => number): string {
+export function makeWrongHex(hex: string, rand: () => number): string {
   const { h, s, l } = hexToHsl(hex);
   if (s < 0.12) {
     // near black/white/grey — give it an obvious tint, keep dark/light bias
@@ -66,7 +66,7 @@ function makeWrongHex(hex: string, rand: () => number): string {
   return hslToHex(nh, ns, nl);
 }
 
-function seededRand(seed: number) {
+export function seededRand(seed: number) {
   let s = seed;
   return () => { const x = Math.sin(s++) * 10000; return x - Math.floor(x); };
 }
