@@ -3,13 +3,16 @@
 // from the flag-card direction deck, but built from the real daily puzzle instead
 // of CSS-drawn stand-ins.
 import { useMemo } from 'react';
+import { Trophy } from 'lucide-react';
 import { getDailyFlagPuzzle } from './flag-core';
 import { swapRegion } from './flag-highlight';
 import { flagDataUri, flagAspect } from './flag-card';
 
 type Props = {
   onPlay: () => void;
+  onLeaderboard: () => void;
   playersToday: number;
+  playedToday: boolean;
 };
 
 const dailyKicker = () => {
@@ -41,7 +44,7 @@ const Ribbon = ({ flags, reverse, duration, className }: { flags: string[]; reve
   </div>
 );
 
-export const FlagSplitHero = ({ onPlay, playersToday }: Props) => {
+export const FlagSplitHero = ({ onPlay, onLeaderboard, playersToday, playedToday }: Props) => {
   const rounds = useMemo(() => getDailyFlagPuzzle(), []);
   // Qatar's serrated band reads badly at hero size, so keep it to the game itself
   const heroRound = rounds.find(r => r.flag.name !== 'Qatar') ?? rounds[0]!;
@@ -83,14 +86,24 @@ export const FlagSplitHero = ({ onPlay, playersToday }: Props) => {
           </p>
         </div>
 
-        <div className="order-4 fi-cta shrink-0 w-full sm:w-48 relative p-[5px] rounded-[1.2rem] overflow-hidden hover:scale-[1.03] active:scale-95 transition-all duration-300 group/rainbow">
-          <div className="absolute inset-[-500%] bg-[conic-gradient(from_0deg,#ff4545,#f2f245,#45f245,#45f2f2,#4545f2,#f245f2,#ff4545)] animate-spin-slow opacity-40 group-hover/rainbow:opacity-100 transition-opacity" />
+        <div className="order-4 shrink-0 w-full sm:w-auto flex items-stretch justify-center lg:justify-start gap-3">
+          <div className="fi-cta flex-1 sm:flex-none sm:w-48 relative p-[5px] rounded-[1.2rem] overflow-hidden hover:scale-[1.03] active:scale-95 transition-all duration-300 group/rainbow">
+            <div className="absolute inset-[-500%] bg-[conic-gradient(from_0deg,#ff4545,#f2f245,#45f245,#45f2f2,#4545f2,#f245f2,#ff4545)] animate-spin-slow opacity-40 group-hover/rainbow:opacity-100 transition-opacity" />
+            <button
+              onClick={onPlay}
+              className="relative z-10 w-full py-[clamp(0.6rem,1.8vh,1rem)] sm:py-4 bg-white text-black font-black rounded-2xl flex items-center justify-center text-base sm:text-xl transition-colors duration-300 overflow-hidden"
+            >
+              {playedToday ? 'See result' : 'Daily'}
+              <span className="fi-sheen pointer-events-none absolute inset-y-0 -left-1/3 w-1/3 bg-gradient-to-r from-transparent via-white/70 to-transparent mix-blend-overlay" />
+            </button>
+          </div>
+          {/* Below lg the card is full-screen and its top-right corner sits under the fixed header, so the trophy lives here */}
           <button
-            onClick={onPlay}
-            className="relative z-10 w-full py-[clamp(0.6rem,1.8vh,1rem)] sm:py-4 bg-white text-black font-black rounded-2xl flex items-center justify-center text-base sm:text-xl transition-colors duration-300 overflow-hidden"
+            onClick={onLeaderboard}
+            aria-label="Leaderboard"
+            className="lg:hidden shrink-0 px-4 sm:px-5 rounded-2xl border border-white/15 bg-white/[0.06] text-white flex items-center justify-center hover:bg-white/[0.12] active:scale-95 transition-all"
           >
-            Daily
-            <span className="fi-sheen pointer-events-none absolute inset-y-0 -left-1/3 w-1/3 bg-gradient-to-r from-transparent via-white/70 to-transparent mix-blend-overlay" />
+            <Trophy size={22} />
           </button>
         </div>
 

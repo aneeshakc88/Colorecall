@@ -824,7 +824,7 @@ export default function App() {
       fetchFlagScores();
       fetchFlagStats();
     }
-  }, [showScoreboard, gameEdition]);
+  }, [showScoreboard, gameEdition, showFlagGame]);
 
   const fetchColorSportScores = async () => {
     try {
@@ -853,7 +853,7 @@ export default function App() {
       fetchColorSportScores();
       fetchColorSportStats();
     }
-  }, [showScoreboard, gameEdition]);
+  }, [showScoreboard, gameEdition, showCrestGame]);
 
   const postGameHistory = async (finalTotal: number, finalRoundData: RoundData[]) => {
     try {
@@ -1409,7 +1409,7 @@ export default function App() {
                             }}
                           />
                         ) : (
-                          <div className="flex flex-col h-full justify-start sm:justify-between items-start w-full max-w-2xl gap-8 sm:gap-4 relative z-10 pt-12 sm:pt-2">
+                          <div className="flex flex-col h-full justify-start sm:justify-between items-start w-full max-w-2xl gap-8 sm:gap-4 relative z-10 pt-16 lg:pt-2">
                             <motion.div
                               initial={{ opacity: 0, y: 20 }}
                               animate={{ opacity: 1, y: 0 }}
@@ -1543,7 +1543,7 @@ export default function App() {
                             }}
                           />
                         ) : (
-                          <div className="flex flex-col h-full justify-start sm:justify-between items-start w-full max-w-2xl gap-8 sm:gap-4 relative z-10 pt-12 sm:pt-2">
+                          <div className="flex flex-col h-full justify-start sm:justify-between items-start w-full max-w-2xl gap-8 sm:gap-4 relative z-10 pt-16 lg:pt-2">
                             <motion.div
                               initial={{ opacity: 0, y: 20 }}
                               animate={{ opacity: 1, y: 0 }}
@@ -1646,7 +1646,7 @@ export default function App() {
                             onClick={() => { audio.playClick(); trackButtonClick('Score'); setShowScoreboard(true); }}
                             onMouseEnter={() => audio.playHover()}
                             aria-label="Leaderboard"
-                            className="absolute top-4 right-4 lg:top-6 lg:right-6 z-20 w-11 h-11 rounded-full border border-white/15 bg-white/[0.06] text-white flex items-center justify-center hover:bg-white/[0.12] active:scale-95 transition-all"
+                            className="absolute top-6 right-6 z-20 w-11 h-11 rounded-full border border-white/15 bg-white/[0.06] text-white hidden lg:flex items-center justify-center hover:bg-white/[0.12] active:scale-95 transition-all"
                           >
                             <Trophy size={20} />
                           </button>
@@ -1753,6 +1753,7 @@ export default function App() {
                               <CrestSplitHero
                                 playersToday={colorSportTotalPlayers}
                                 playedToday={hasPlayedColorSportToday}
+                                onLeaderboard={() => { audio.playClick(); trackButtonClick('Score'); setShowScoreboard(true); }}
                                 onPlay={() => {
                                   audio.playClick();
                                   trackButtonClick('ColorSportDaily');
@@ -1805,7 +1806,7 @@ export default function App() {
                               onClick={() => { audio.playClick(); trackButtonClick('Score'); setShowScoreboard(true); }}
                               onMouseEnter={() => audio.playHover()}
                               aria-label="Leaderboard"
-                              className="absolute top-4 right-4 lg:top-6 lg:right-6 z-20 w-11 h-11 rounded-full border border-white/15 bg-white/[0.06] text-white flex items-center justify-center hover:bg-white/[0.12] active:scale-95 transition-all"
+                              className={`absolute top-4 right-4 lg:top-6 lg:right-6 z-20 w-11 h-11 rounded-full border border-white/15 bg-white/[0.06] text-white ${flagIntroLayout === 'split' ? 'hidden lg:flex' : 'flex'} items-center justify-center hover:bg-white/[0.12] active:scale-95 transition-all`}
                             >
                               <Trophy size={20} />
                             </button>
@@ -1958,6 +1959,8 @@ export default function App() {
                             ) : flagIntroLayout === 'split' ? (
                               <FlagSplitHero
                                 playersToday={flagTotalPlayers}
+                                playedToday={hasPlayedFlagToday}
+                                onLeaderboard={() => { audio.playClick(); trackButtonClick('Score'); setShowScoreboard(true); }}
                                 onPlay={() => {
                                   audio.playClick();
                                   trackButtonClick('FlagDaily');

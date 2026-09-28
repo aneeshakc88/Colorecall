@@ -4,7 +4,7 @@ import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { audio } from '../utils/audio';
 import { trackGameEnd } from '../analytics';
-import { Color, hsbToRgb, VerticalSlider, AnimatedScore, getUserId, getUserType, getDeviceType, generateSessionId } from '../utils/colorMath';
+import { Color, hsbToRgb, VerticalSlider, HorizontalSlider, AnimatedScore, getUserId, getUserType, getDeviceType, generateSessionId } from '../utils/colorMath';
 import { getDailyFlagPuzzle, FLAG_MAX_PER_ROUND, type DailyFlagRound } from './flag-core';
 import { getCurrentCycle, getNextResetTime, cycleDateLabel } from '../daily-cycle';
 import { swapRegion, regionOutline, regionOutlineRaster, applyOverlay, viewBoxRatio, type Raster } from './flag-highlight';
@@ -118,34 +118,18 @@ function useRegionOutline(svg: string | undefined, hex: string, idx?: number[]):
   return sync ?? (svg && rastered?.key === svg + hex + key ? rastered.overlay : null);
 }
 
-const MAT_COLOR = '#808080';
-const MAT_RATIO = 0.05;
-
 function FlagImg({ svg, hiddenHex, hiddenIdx, swapHex, height }: { svg: string; hiddenHex: string; hiddenIdx?: number[] | undefined; swapHex: string; height: number }) {
   const overlay = useRegionOutline(svg, hiddenHex, hiddenIdx);
   let out = swapRegion(svg, hiddenHex, swapHex, hiddenIdx);
   out = applyOverlay(out, overlay);
   const ratio = viewBoxRatio(svg);
-  // Neutral 18% grey mat: flags carry both black and white regions, so no page
-  // background can bound all of them. Grey is also the neutral ground for judging
-  // colour — a tinted mat would shift how the guess reads.
-  const mat = Math.max(3, Math.round(height * MAT_RATIO));
+  // Hairline ring bounds black/white edges against the black card.
   return (
     <div
-      className="shrink-0 rounded-xl"
-      style={{
-        padding: mat,
-        background: MAT_COLOR,
-        boxShadow: '0 8px 30px rgba(0,0,0,0.5)',
-        maxWidth: '100%',
-      }}
-    >
-      <div
-        className="overflow-hidden rounded-md [&>svg]:block [&>svg]:h-full [&>svg]:w-full"
-        style={{ height, width: Math.round(height * ratio), maxWidth: '100%' }}
-        dangerouslySetInnerHTML={{ __html: out }}
-      />
-    </div>
+      className="shrink-0 overflow-hidden rounded-md [&>svg]:block [&>svg]:h-full [&>svg]:w-full"
+      style={{ height, width: Math.round(height * ratio), maxWidth: '100%', boxShadow: '0 0 0 1px rgba(255,255,255,0.25)' }}
+      dangerouslySetInnerHTML={{ __html: out }}
+    />
   );
 }
 
@@ -293,14 +277,13 @@ export default function FlagGame({ hasPlayedToday: _hasPlayedToday, onPlayedToda
   };
 
   const flagRatio = round ? viewBoxRatio(round.flag.svg) : 1.5;
-  // /(1+2*MAT_RATIO): the mat sits outside `height`, so the flag has to shrink to keep the framed card inside its box.
-  const flagHeight = Math.max(40, Math.min(boxH || 200, boxW ? boxW / flagRatio : 200) / (1 + 2 * MAT_RATIO));
+  const flagHeight = Math.max(40, Math.min(boxH || 200, boxW ? boxW / flagRatio : 200));
 
   if (phase === 'playing' && round) {
     return (
       <div className={CARD_PLAY} style={{ transformStyle: 'preserve-3d' }}>
         <div className="flex-1 flex overflow-hidden relative">
-          <div className="flex flex-shrink-0">
+          <div className="hidden lg:flex flex-shrink-0">
             <VerticalSlider
               value={color.h}
               max={360}
@@ -324,22 +307,50 @@ export default function FlagGame({ hasPlayedToday: _hasPlayedToday, onPlayedToda
             />
           </div>
 
-          <div className="absolute top-16 sm:top-6 left-32 sm:left-32 md:left-40 text-white text-xs tracking-widest uppercase z-20 pointer-events-none">
+          <div className="absolute top-6 sm:top-24 lg:top-6 left-6 lg:left-40 text-white text-xs tracking-widest uppercase z-20 pointer-events-none">
             {currentRound + 1}/{rounds.length}
           </div>
 
-          <div className="flex-1 flex flex-col items-center justify-center relative px-4">
-            <div className="absolute top-10 sm:top-12 left-1/2 -translate-x-1/2 text-white/60 text-xs sm:text-sm tracking-[0.15em] sm:tracking-[0.2em] uppercase font-bold z-20 text-center max-w-[80%]">
+          <div className="flex-1 min-w-0 flex flex-col items-center gap-4 relative px-4 sm:px-8 pt-14 sm:pt-32 pb-32 lg:p-4 lg:justify-center">
+            <div className="lg:absolute lg:top-12 lg:left-1/2 lg:-translate-x-1/2 text-white/60 text-xs sm:text-sm tracking-[0.15em] sm:tracking-[0.2em] uppercase font-bold z-20 text-center max-w-[80%]">
               Fix the wrong colour in the <span className="text-white">{round.flag.name}</span> flag
             </div>
 
-            <div ref={flagBoxRef} className="w-full max-w-[260px] sm:max-w-sm md:max-w-md h-28 sm:h-36 md:h-44 flex items-center justify-center">
+            <div ref={flagBoxRef} className="w-full flex-1 min-h-0 lg:flex-none lg:max-w-md lg:h-44 flex items-center justify-center">
               <FlagImg svg={round.flag.svg} hiddenHex={round.hiddenHex} hiddenIdx={round.hiddenIdx} swapHex={colorToHex(color)} height={flagHeight} />
+            </div>
+
+            <div className="w-full grid gap-3 lg:hidden">
+              <HorizontalSlider
+                label="Hue"
+                suffix="°"
+                value={color.h}
+                max={360}
+                type="H"
+                onChange={(v) => setColor(prev => ({ ...prev, h: v }))}
+                bg="linear-gradient(to right, #ff0000 0%, #ffff00 16.67%, #00ff00 33.33%, #00ffff 50%, #0000ff 66.67%, #ff00ff 83.33%, #ff0000 100%)"
+              />
+              <HorizontalSlider
+                label="Saturation"
+                value={color.s}
+                max={100}
+                type="S"
+                onChange={(v) => setColor(prev => ({ ...prev, s: v }))}
+                bg={`linear-gradient(to right, ${colorToHex({ h: color.h, s: 0, b: color.b })}, ${colorToHex({ h: color.h, s: 100, b: color.b })})`}
+              />
+              <HorizontalSlider
+                label="Brightness"
+                value={color.b}
+                max={100}
+                type="B"
+                onChange={(v) => setColor(prev => ({ ...prev, b: v }))}
+                bg={`linear-gradient(to right, #000, ${colorToHex({ h: color.h, s: color.s, b: 100 })})`}
+              />
             </div>
 
             <button
               onClick={handleSubmit}
-              className="absolute bottom-6 right-6 px-8 py-3 bg-white text-black hover:bg-zinc-200 active:scale-[0.95] rounded-xl text-sm font-bold tracking-tight transition-all duration-300 shadow-2xl"
+              className="absolute bottom-14 lg:bottom-6 right-6 px-8 py-3 bg-white text-black hover:bg-zinc-200 active:scale-[0.95] rounded-xl text-sm font-bold tracking-tight transition-all duration-300 shadow-2xl"
             >
               Submit
             </button>
@@ -354,11 +365,11 @@ export default function FlagGame({ hasPlayedToday: _hasPlayedToday, onPlayedToda
     return (
       <div className={CARD_PLAY} style={{ transformStyle: 'preserve-3d' }}>
         <div className="relative flex-1 flex flex-col items-center justify-center p-8 md:p-12">
-          <div className="absolute top-16 sm:top-6 left-6 text-white text-xs tracking-widest uppercase z-20">
+          <div className="absolute top-16 sm:top-28 lg:top-6 left-6 text-white text-xs tracking-widest uppercase z-20">
             {currentRound + 1}/{rounds.length}
           </div>
 
-          <div className="absolute top-6 right-6 flex flex-col items-end text-right">
+          <div className="absolute top-6 sm:top-24 lg:top-6 right-6 flex flex-col items-end text-right">
             <div className="flex items-baseline gap-1 mb-1">
               <h2 className="text-5xl md:text-6xl font-bold tracking-tighter leading-none text-white">
                 <AnimatedScore value={lastResult.score} onComplete={() => {
@@ -386,7 +397,7 @@ export default function FlagGame({ hasPlayedToday: _hasPlayedToday, onPlayedToda
           </div>
           <p className="text-white/50 text-[10px] uppercase tracking-widest font-bold">{lastResult.flagName}</p>
 
-          <div className="absolute bottom-6 right-6">
+          <div className="absolute bottom-14 lg:bottom-6 right-6">
             <button
               onClick={handleContinue}
               className="px-8 py-5 bg-white text-black rounded-2xl flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-2xl shadow-white/20 font-bold text-lg"
