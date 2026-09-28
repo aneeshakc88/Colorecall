@@ -194,7 +194,7 @@ export default function CrestGame({ hasPlayedToday: _hasPlayedToday, onPlayedTod
         deviceType: getDeviceType(),
         userId: getUserId(),
         userType: getUserType(),
-        name: playerName || 'BB',
+        name: playerName,
         isPosted: true,
       });
     } catch (e) {
@@ -245,7 +245,7 @@ export default function CrestGame({ hasPlayedToday: _hasPlayedToday, onPlayedTod
       else if (r.score >= 11) grid += "🟧";
       else grid += "🟥";
     });
-    const text = `Color-sport Daily - ${dateStr}\nScore: ${totalScore}/${maxTotal}\n${grid}\nPlay at: https://www.colorecall.com/`;
+    const text = `Football Logo Daily - ${dateStr}\nScore: ${totalScore}/${maxTotal}\n${grid}\nPlay at: https://www.colorecall.com/football-logo`;
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -369,7 +369,7 @@ export default function CrestGame({ hasPlayedToday: _hasPlayedToday, onPlayedTod
         <X size={24} />
       </button>
 
-      <p className="text-white text-[10px] tracking-[0.3em] uppercase font-bold mb-4 opacity-50">Color-sport Mastery</p>
+      <p className="text-white text-[10px] tracking-[0.3em] uppercase font-bold mb-4 opacity-50">Football Logo Mastery</p>
 
       <div className="flex items-baseline justify-center gap-2 mb-6">
         <h2 className="text-5xl md:text-6xl font-bold tracking-tighter leading-none text-white">

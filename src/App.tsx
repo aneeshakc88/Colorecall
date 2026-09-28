@@ -1,15 +1,13 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { Link } from 'react-router-dom';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { ArrowRight, Share2, Trophy, User, Calendar, Send, Volume2, VolumeX, RefreshCw } from 'lucide-react';
-import * as FaIcons from 'react-icons/fa';
+import { ArrowRight, ArrowLeftRight, Share2, Trophy, User, Calendar, Send, Volume2, VolumeX, RefreshCw, CircleHelp } from 'lucide-react';
+import { GenIcon, type IconBaseProps, type IconTree } from 'react-icons';
+import { SHAPE_COUNT, SHAPE_VERSION } from './shape-icons';
 import { db } from './firebase';
 import { getDynamicFeedback } from './utils';
 import { audio } from './utils/audio';
-import { Color, hsbToRgb, hsbToString, VerticalSlider, AnimatedScore, getUserId, getMyUserIds, getUserType, getDeviceType, generateSessionId } from './utils/colorMath';
-import FlagGame from './flag/FlagGame';
-import { FlagIntroRing } from './flag/FlagRing';
-import { FlagSplitHero } from './flag/FlagSplitHero';
+import { Color, hsbToRgb, hsbToString, VerticalSlider, HorizontalSlider, AnimatedScore, getUserId, getMyUserIds, getUserType, getDeviceType, generateSessionId } from './utils/colorMath';
 import { getCurrentCycle, getNextResetTime, cycleDateLabel } from './daily-cycle';
 
 // Split Hero is the only flag intro anywhere, dev included. The alternates stay
@@ -20,15 +18,42 @@ const HERO_LAB = new URLSearchParams(window.location.search).has('heroLab');
 // hero renders the day's real badges, so it pulls the same chunk.
 const CrestGame = React.lazy(() => import('./crest/CrestGame'));
 const CrestSplitHero = React.lazy(() => import('./crest/CrestSplitHero').then(m => ({ default: m.CrestSplitHero })));
+// Same for the flag dataset.
+const FlagGame = React.lazy(() => import('./flag/FlagGame'));
+const FlagIntroRing = React.lazy(() => import('./flag/FlagRing').then(m => ({ default: m.FlagIntroRing })));
+const FlagSplitHero = React.lazy(() => import('./flag/FlagSplitHero').then(m => ({ default: m.FlagSplitHero })));
+const FlagDeckHero = React.lazy(() => import('./flag/FlagDeckHero').then(m => ({ default: m.FlagDeckHero })));
+const FlagDemoHero = React.lazy(() => import('./flag/FlagDemoHero').then(m => ({ default: m.FlagDemoHero })));
 
-const MEDAL_HEX = ['#fbbf24', '#cbd5e1', '#f0a868'];
-import { FlagDeckHero } from './flag/FlagDeckHero';
-import { FlagDemoHero } from './flag/FlagDemoHero';
+// Each shape icon is its own ~0.4KB file (generated from shapes.ts), so a round fetches only the
+// icons it shows instead of all of them. OBJECTS is filled as icons arrive; one component per index
+// keeps the === / indexOf comparisons in scoring working.
+const OBJECTS: React.ElementType[] = [];
+const iconLoads = new Map<number, Promise<void>>();
+const loadIcon = (i: number) => {
+  let p = iconLoads.get(i);
+  if (!p) {
+    p = fetch(`/shape-icons/${i}.json?v=${SHAPE_VERSION}`)
+      .then(r => { if (!r.ok) throw new Error(`shape icon ${i}: HTTP ${r.status}`); return r.json() as Promise<IconTree>; })
+      .then(tree => { OBJECTS[i] = GenIcon(tree); });
+    p.catch(() => iconLoads.delete(i));
+    iconLoads.set(i, p);
+  }
+  return p;
+};
+const loadIcons = (indices: number[]) => Promise.all(indices.map(loadIcon));
+// Local copy of react-icons FaTimes: importing it from 'react-icons/fa' would pull the whole icon set back into this chunk.
+const FaTimes = (props: IconBaseProps) => GenIcon({"tag":"svg","attr":{"viewBox":"0 0 352 512"},"child":[{"tag":"path","attr":{"d":"M242.72 256l100.07-100.07c12.28-12.28 12.28-32.19 0-44.48l-22.24-22.24c-12.28-12.28-32.19-12.28-44.48 0L176 189.28 75.93 89.21c-12.28-12.28-32.19-12.28-44.48 0L9.21 111.45c-12.28 12.28-12.28 32.19 0 44.48L109.28 256 9.21 356.07c-12.28 12.28-12.28 32.19 0 44.48l22.24 22.24c12.28 12.28 32.2 12.28 44.48 0L176 322.72l100.07 100.07c12.28 12.28 32.2 12.28 44.48 0l22.24-22.24c12.28-12.28 12.28-32.19 0-44.48L242.72 256z"},"child":[]}]})(props);
+
+const MEDAL_HEX =['#fbbf24', '#cbd5e1', '#f0a868'];
 import { initGA, trackPageView, trackButtonClick, trackGameStart, trackGameEnd } from './analytics';
 import { collection, addDoc, query, orderBy, getDocs, serverTimestamp, where, Timestamp, updateDoc, doc, limit, getCountFromServer } from 'firebase/firestore';
 import Leaderboard, { BoardData, BoardRow, MyStats } from './components/Leaderboard';
 import { signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, User as FirebaseUser } from 'firebase/auth';
 import { auth } from './firebase';
+import { PAGES, SITE_URL, type Edition } from './seo/pages';
+import HowToPlay from './seo/HowToPlay';
+import { getGuestName, DisplayNameButton, DisplayNameModal } from './components/DisplayName';
 
 enum OperationType {
   CREATE = 'create',
@@ -81,7 +106,34 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   throw new Error(JSON.stringify(errInfo));
 }
 
-type GameState = 'start' | 'ready' | 'memorize' | 'recreate' | 'result' | 'final';
+// Round result as two colour bands (shown on top, answer below). false reverts to the side-by-side card.
+const BAND_RESULT = true;
+
+// Black or white, whichever the band's own luminance can carry.
+const inkOn = (c: Color) => {
+  const [r, g, b] = hsbToRgb(c.h, c.s, c.b);
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 > 0.55 ? 'rgba(0,0,0,.82)' : 'rgba(255,255,255,.94)';
+};
+
+const EDITION_PATHS = Object.fromEntries(Object.entries(PAGES).map(([k, p]) => [k, p.path])) as Record<Edition, string>;
+const applySeo = (edition: Edition) => {
+  const { path, title, socialTitle = title, description } = PAGES[edition];
+  const url = SITE_URL + path;
+  const set = (selector: string, attr: string, value: string) =>
+    document.head.querySelector(selector)?.setAttribute(attr, value);
+  document.title = title;
+  set('meta[name="description"]', 'content', description);
+  for (const p of ['og', 'twitter']) {
+    set(`meta[property="${p}:title"]`, 'content', socialTitle);
+    set(`meta[property="${p}:description"]`, 'content', description);
+    set(`meta[property="${p}:url"]`, 'content', url);
+  }
+  set('link[rel="canonical"]', 'href', url);
+};
+const editionFromPath = (path: string): Edition =>
+  (Object.keys(EDITION_PATHS) as Edition[]).find(k => k !== 'duo' && EDITION_PATHS[k] === path.replace(/\/+$/, '')) ?? 'duo';
+
+type GameState ='start' | 'ready' | 'memorize' | 'pick' | 'recreate' | 'result' | 'final';
 
 type RoundData = {
   targetColor: Color;
@@ -90,12 +142,6 @@ type RoundData = {
   userObjectIndex: number;
   score: number;
 };
-
-const allIcons = Object.entries(FaIcons)
-  .filter(([key, value]) => typeof value === 'function' && key !== 'FaTimes')
-  .map(([_, value]) => value as React.ElementType);
-
-const OBJECTS = allIcons.slice(0, 500);
 
 // --- DAILY SEEDED RANDOM GENERATOR ---
 
@@ -117,10 +163,10 @@ const generateSeededColor = (rng: () => number): Color => ({
 });
 
 const DAILY_POOL = Array.from({ length: 2000 }, () => {
-  const targetIndex = Math.floor(poolRandom() * OBJECTS.length);
+  const targetIndex = Math.floor(poolRandom() * SHAPE_COUNT);
   const options = new Set<number>([targetIndex]);
   while (options.size < 10) {
-    options.add(Math.floor(poolRandom() * OBJECTS.length));
+    options.add(Math.floor(poolRandom() * SHAPE_COUNT));
   }
   const optionsArray = Array.from(options);
   for (let i = optionsArray.length - 1; i > 0; i--) {
@@ -139,10 +185,10 @@ const DAILY_POOL = Array.from({ length: 2000 }, () => {
 const duoPoolRandom = mulberry32(9173);
 
 const DUO_POOL = Array.from({ length: 2000 }, () => {
-  const targetIndex = Math.floor(duoPoolRandom() * OBJECTS.length);
-  let distractorIndex = Math.floor(duoPoolRandom() * OBJECTS.length);
+  const targetIndex = Math.floor(duoPoolRandom() * SHAPE_COUNT);
+  let distractorIndex = Math.floor(duoPoolRandom() * SHAPE_COUNT);
   while (distractorIndex === targetIndex) {
-    distractorIndex = Math.floor(duoPoolRandom() * OBJECTS.length);
+    distractorIndex = Math.floor(duoPoolRandom() * SHAPE_COUNT);
   }
   return {
     color: generateSeededColor(duoPoolRandom),
@@ -153,6 +199,85 @@ const DUO_POOL = Array.from({ length: 2000 }, () => {
     targetPosition: (duoPoolRandom() > 0.5 ? 1 : 0) as 0 | 1
   };
 });
+
+type PlannedRound = {
+  color: Color;
+  objectIndex: number;
+  options: number[];
+  distractorColor?: Color;
+  distractorObjectIndex?: number;
+  targetPosition?: 0 | 1;
+};
+
+const randomRound = (duo: boolean): PlannedRound => {
+  const targetIndex = Math.floor(Math.random() * SHAPE_COUNT);
+  const options = new Set<number>([targetIndex]);
+  while (options.size < 10) {
+    options.add(Math.floor(Math.random() * SHAPE_COUNT));
+  }
+  const optionsArray = Array.from(options);
+  for (let i = optionsArray.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [optionsArray[i], optionsArray[j]] = [optionsArray[j], optionsArray[i]];
+  }
+  const round: PlannedRound = {
+    color: {
+      h: Math.floor(Math.random() * 360),
+      s: 20 + Math.floor(Math.random() * 81),
+      b: 20 + Math.floor(Math.random() * 61)
+    },
+    objectIndex: targetIndex,
+    options: optionsArray
+  };
+  if (duo) {
+    round.distractorColor = {
+      h: Math.floor(Math.random() * 360),
+      s: 20 + Math.floor(Math.random() * 81),
+      b: 20 + Math.floor(Math.random() * 61)
+    };
+    let distractorIdx = Math.floor(Math.random() * SHAPE_COUNT);
+    while (distractorIdx === targetIndex) {
+      distractorIdx = Math.floor(Math.random() * SHAPE_COUNT);
+    }
+    round.distractorObjectIndex = distractorIdx;
+    round.targetPosition = Math.random() > 0.5 ? 1 : 0;
+  }
+  return round;
+};
+
+// Duo rounds show only the target and distractor (no shape picker), so the 10 options aren't fetched.
+const roundIcons = (p: PlannedRound) =>
+  p.distractorObjectIndex === undefined ? [p.objectIndex, ...p.options] : [p.objectIndex, p.distractorObjectIndex];
+
+const savedRoundIcons = (saved: { roundData?: RoundData[] }) =>
+  (saved.roundData || []).flatMap(d => [d.targetObjectIndex, d.userObjectIndex]).filter(i => i >= 0 && i < SHAPE_COUNT);
+
+type GameMode = 'daily' | 'solo' | 'duo' | 'duo-quickplay';
+// Quick Play rounds are rolled one ahead so their icons are already fetched when the player taps.
+const upcomingRandom: Partial<Record<'solo' | 'duo-quickplay', PlannedRound>> = {};
+const planRound = (r: number, mode: GameMode, cycle: number): PlannedRound => {
+  if (mode === 'daily') return DAILY_POOL[(cycle * 4 + (r - 1)) % 2000];
+  if (mode === 'duo') return DUO_POOL[(cycle * 4 + (r - 1)) % 2000];
+  return upcomingRandom[mode] ??= randomRound(mode === 'duo-quickplay');
+};
+const prefetchRound = (r: number, mode: GameMode, cycle: number) => {
+  loadIcons(roundIcons(planRound(r, mode, cycle))).catch(() => {});
+};
+// What this page's start buttons open: round 1 of each mode, or today's saved results if already played.
+const prefetchStartScreen = (edition: Edition, cycle: number) => {
+  const modes: [string, GameMode, GameMode] | null =
+    edition === 'duo' ? ['duo_daily_chroma_state', 'duo', 'duo-quickplay'] :
+    edition === 'classic' ? ['daily_chroma_state', 'daily', 'solo'] : null;
+  if (!modes) return;
+  const [savedKey, daily, quick] = modes;
+  let saved: { cycleId?: number; completed?: boolean; roundData?: RoundData[] } = {};
+  try { saved = JSON.parse(localStorage.getItem(savedKey) || '{}'); } catch {}
+  if (saved.cycleId === cycle && saved.completed) loadIcons(savedRoundIcons(saved)).catch(() => {});
+  else prefetchRound(1, daily, cycle);
+  prefetchRound(1, quick, cycle);
+};
+// Start as soon as this module runs, before React's first render.
+prefetchStartScreen(editionFromPath(window.location.pathname), getCurrentCycle());
 
 const rgbToLab = (r: number, g: number, b: number): [number, number, number] => {
   r /= 255; g /= 255; b /= 255;
@@ -378,6 +503,8 @@ export default function App() {
   const [totalScore, setTotalScore] = useState(0);
   const [roundData, setRoundData] = useState<RoundData[]>([]);
   const [countdown, setCountdown] = useState(3);
+  const [memoProgress, setMemoProgress] = useState(0);
+  const [shutter, setShutter] = useState(false);
   const [targetObject, setTargetObject] = useState<React.ElementType>(OBJECTS[0]);
   const [distractorObject, setDistractorObject] = useState<React.ElementType>(OBJECTS[0]);
   const [duoTargetPosition, setDuoTargetPosition] = useState<0 | 1>(0);
@@ -402,6 +529,10 @@ export default function App() {
   const [showScoreText, setShowScoreText] = useState(false);
   const [currentOptions, setCurrentOptions] = useState<number[]>([]);
   const [playerName, setPlayerName] = useState(() => localStorage.getItem('mastery_player_name') || '');
+  const [guestName] = useState(getGuestName);
+  const displayName = playerName.trim() || guestName;
+  const [showNameModal, setShowNameModal] = useState(false);
+  const closeNameModal = useCallback(() => setShowNameModal(false), []);
   const [isPosting, setIsPosting] = useState(false);
   const [isHoveringDaily, setIsHoveringDaily] = useState(false);
 
@@ -418,7 +549,23 @@ export default function App() {
   const [isHoveringQuickPlay, setIsHoveringQuickPlay] = useState(false);
   const [isHoveringDuo, setIsHoveringDuo] = useState(false);
   const [isHoveringScore, setIsHoveringScore] = useState(false);
-  const [gameEdition, setGameEdition] = useState<'duo' | 'classic' | 'flag' | 'crest'>('duo');
+  const [showHowToPlay, setShowHowToPlay] = useState(false);
+  const closeHowToPlay = useCallback(() => setShowHowToPlay(false), []);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const gameEdition = editionFromPath(location.pathname);
+  const setGameEdition = (next: Edition | ((prev: Edition) => Edition)) =>
+    navigate(EDITION_PATHS[typeof next === 'function' ? next(gameEdition) : next]);
+  // URL is the source of truth, so back/forward also abandon any round in progress.
+  useEffect(() => {
+    applySeo(gameEdition);
+    setShowFlagGame(false);
+    setShowCrestGame(false);
+    setShowScoreboard(false);
+    setGameState('start');
+    setTotalScore(0);
+    setRoundData([]);
+  }, [gameEdition]);
   const [splashTrigger, setSplashTrigger] = useState(0);
   const [user, setUser] = useState<FirebaseUser | null>(null);
   const isAdmin = user?.email === 'aneeshakc88@gmail.com';
@@ -732,7 +879,7 @@ export default function App() {
     try {
       const collectionName = getCollectionName(mode);
       const isDaily = mode === 'daily' || mode === 'duo';
-      const nameToSave = isDaily ? (playerName.trim() || 'BB') : (playerName.trim() || 'Anonymous');
+      const nameToSave = isDaily ? displayName : (playerName.trim() || 'Anonymous');
       const isPosted = isDaily ? true : !!playerName.trim();
 
       const docRef = await addDoc(collection(db, collectionName), {
@@ -798,7 +945,23 @@ export default function App() {
     }
   };
 
+  // The round's icons download during the 2s "Focus." countdown (which shows none); memorize waits for them.
+  const [roundIconsReady, setRoundIconsReady] = useState(false);
+  const roundToken = useRef(0);
+
   const startRound = (r: number, mode: 'daily' | 'solo' | 'duo' | 'duo-quickplay' = gameMode) => {
+    const roundInfo = planRound(r, mode, getEffectiveCycle());
+    if (mode === 'solo' || mode === 'duo-quickplay') delete upcomingRandom[mode];
+    const token = ++roundToken.current;
+    setRoundIconsReady(false);
+    const retry = () => loadIcons(roundIcons(roundInfo)).then(() => {
+      if (token !== roundToken.current) return;
+      setTargetObject(() => OBJECTS[roundInfo.objectIndex]);
+      setUserObject(() => mode.startsWith('duo') ? OBJECTS[roundInfo.objectIndex] : OBJECTS[roundInfo.options[0]]);
+      if (mode.startsWith('duo')) setDistractorObject(() => OBJECTS[roundInfo.distractorObjectIndex!]);
+      setRoundIconsReady(true);
+    }, () => { if (token === roundToken.current) setTimeout(retry, 1000); });
+    retry();
     setRound(r);
     setGameMode(mode);
 
@@ -809,62 +972,23 @@ export default function App() {
       }
     }
 
-    let roundInfo;
-    let seededDuo: typeof DUO_POOL[number] | null = null;
-    if (mode === 'daily') {
-      roundInfo = DAILY_POOL[(getEffectiveCycle() * 4 + (r - 1)) % 2000];
-    } else if (mode === 'duo') {
-      seededDuo = DUO_POOL[(getEffectiveCycle() * 4 + (r - 1)) % 2000];
-      roundInfo = seededDuo;
-    } else {
-      const targetIndex = Math.floor(Math.random() * OBJECTS.length);
-      const options = new Set<number>([targetIndex]);
-      while (options.size < 10) {
-        options.add(Math.floor(Math.random() * OBJECTS.length));
-      }
-      const optionsArray = Array.from(options);
-      for (let i = optionsArray.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [optionsArray[i], optionsArray[j]] = [optionsArray[j], optionsArray[i]];
-      }
-      roundInfo = {
-        color: {
-          h: Math.floor(Math.random() * 360),
-          s: 20 + Math.floor(Math.random() * 81),
-          b: 20 + Math.floor(Math.random() * 61)
-        },
-        objectIndex: targetIndex,
-        options: optionsArray
-      };
-    }
-
     setTargetColor(roundInfo.color);
     setUserColor({ h: 180, s: 50, b: 100 });
-    setTargetObject(() => OBJECTS[roundInfo.objectIndex]);
-    setUserObject(() => mode.startsWith('duo') ? OBJECTS[roundInfo.objectIndex] : OBJECTS[roundInfo.options[0]]);
     setCurrentOptions(roundInfo.options);
 
-    if (seededDuo) {
-      setDistractorColor(seededDuo.distractorColor);
-      setDistractorObject(() => OBJECTS[seededDuo.distractorObjectIndex]);
-      setDuoTargetPosition(seededDuo.targetPosition);
-    } else if (mode.startsWith('duo')) {
-      setDistractorColor({
-        h: Math.floor(Math.random() * 360),
-        s: 20 + Math.floor(Math.random() * 81),
-        b: 20 + Math.floor(Math.random() * 61)
-      });
-      let distractorIdx = Math.floor(Math.random() * OBJECTS.length);
-      while (distractorIdx === roundInfo.objectIndex) {
-        distractorIdx = Math.floor(Math.random() * OBJECTS.length);
-      }
-      setDistractorObject(() => OBJECTS[distractorIdx]);
-      setDuoTargetPosition(Math.random() > 0.5 ? 1 : 0);
+    if (mode.startsWith('duo')) {
+      setDistractorColor(roundInfo.distractorColor!);
+      setDuoTargetPosition(roundInfo.targetPosition!);
     }
 
+    // Next round (or, after the last, the next game's first) downloads while this one is played.
+    prefetchRound(r < 4 ? r + 1 : 1, mode, getEffectiveCycle());
     setCountdown(2);
     setGameState('ready');
   };
+
+  // Covers client-side navigation between editions and the admin day offset.
+  useEffect(() => prefetchStartScreen(gameEdition, getEffectiveCycle()), [gameEdition, cycleOffset]);
 
   useEffect(() => {
     const currentCycle = getEffectiveCycle();
@@ -929,19 +1053,13 @@ export default function App() {
       if (countdown > 0) {
         audio.playCountdownBeep();
         timer = setTimeout(() => setCountdown(c => c - 1), 1000);
-      } else {
-        audio.playGoBeep();
-        setGameState('memorize');
-        // countdown is already 0 here, which triggers the 200ms delay in the 'memorize' block
       }
-    } else if (gameState === 'memorize') {
+    } else if (gameState === 'memorize' && gameMode.startsWith('duo')) {
       if (countdown === 0) {
         // Just entered memorize state. Wait 200ms before starting the 5s countdown.
         timer = setTimeout(() => {
           setCountdown(5);
         }, 200);
-      } else if (countdown === 5) {
-        timer = setTimeout(() => setCountdown(c => c - 1), 1000);
       } else if (countdown > 1) {
         audio.playTick();
         timer = setTimeout(() => setCountdown(c => c - 1), 1000);
@@ -954,6 +1072,46 @@ export default function App() {
     }
     return () => clearTimeout(timer);
   }, [gameState, countdown]);
+
+  // Separate from the countdown effect so icons arriving mid-countdown don't restart its timer.
+  useEffect(() => {
+    if (gameState !== 'ready' || countdown !== 0 || !roundIconsReady) return;
+    audio.playGoBeep();
+    if (!gameMode.startsWith('duo')) setCountdown(5);
+    setGameState('memorize');
+    // countdown is already 0 here, which triggers the 200ms delay in the 'memorize' block
+  }, [gameState, countdown, roundIconsReady]);
+
+  // Classic memorize, ported from Recall: 200ms beat, then one clock drives the ring
+  // and the number; each drop of the number ticks (4,3,2,1,0), and the shutter snaps at 0.
+  useEffect(() => {
+    if (gameState !== 'memorize' || gameMode.startsWith('duo')) return;
+    const seconds = 5;
+    let raf = 0, spoken = seconds;
+    setCountdown(seconds); setMemoProgress(0);
+    const t = setTimeout(() => {
+      let t0 = 0;
+      const step = (ts: number) => {
+        t0 ||= ts;
+        const p = Math.min((ts - t0) / (seconds * 1000), 1);
+        setMemoProgress(p);
+        const left = Math.ceil((1 - p) * seconds);
+        if (left < spoken) { spoken = left; setCountdown(left); audio.playMemoTick(); }
+        if (p < 1) { raf = requestAnimationFrame(step); return; }
+        setShutter(true);
+      };
+      raf = requestAnimationFrame(step);
+    }, 200);
+    return () => { clearTimeout(t); cancelAnimationFrame(raf); };
+  }, [gameState]);
+
+  // Swap screens while the shutter fully covers them, then clear the overlay.
+  useEffect(() => {
+    if (!shutter) return;
+    const t1 = setTimeout(() => setGameState('pick'), 190);
+    const t2 = setTimeout(() => setShutter(false), 440);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, [shutter]);
 
   const handleSubmit = () => {
     audio.playClick();
@@ -1082,7 +1240,7 @@ export default function App() {
             { key: 'duo' as const, label: 'Duo', played: hasPlayedDuoToday },
             { key: 'classic' as const, label: 'Classic', played: hasPlayedToday },
             { key: 'flag' as const, label: 'Flag', played: hasPlayedFlagToday },
-            { key: 'crest' as const, label: 'Color-sport', played: hasPlayedColorSportToday },
+            { key: 'crest' as const, label: 'Football Logo', played: hasPlayedColorSportToday },
           ]).map(({ key, label, played }) => {
             const active = gameEdition === key;
             return (
@@ -1093,12 +1251,6 @@ export default function App() {
                   audio.playTransition('splash');
                   setSplashTrigger(prev => prev + 1);
                   // Switching mid-round abandons it — no score is saved.
-                  setShowFlagGame(false);
-                  setShowCrestGame(false);
-                  setShowScoreboard(false);
-                  setGameState('start');
-                  setTotalScore(0);
-                  setRoundData([]);
                   setGameEdition(key);
                 }}
                 className={`relative px-2.5 py-1.5 sm:px-3.5 sm:py-1.5 rounded-full text-[11px] sm:text-xs font-bold uppercase tracking-widest transition-all ${active ? 'bg-black text-white' : 'text-zinc-400 hover:text-zinc-700'}`}
@@ -1132,8 +1284,17 @@ export default function App() {
         </div>
       )}
 
+      {/* Display name — top-right from sm up; below sm the mode tabs fill the top row, so it lives in the footer */}
+      {gameState === 'start' && !showScoreboard && !showFlagGame && !showCrestGame && !(HERO_LAB && gameEdition === 'flag') && (
+        <div className="fixed top-6 right-6 z-50 hidden sm:flex items-center pointer-events-auto bg-white/95 backdrop-blur-md border border-zinc-200 rounded-full px-4 py-2.5 shadow-xl text-xs font-bold text-zinc-500">
+          <DisplayNameButton name={displayName} onClick={() => { audio.playClick(); setShowNameModal(true); }} />
+        </div>
+      )}
+      <DisplayNameModal open={showNameModal} name={displayName} suggested={guestName} onClose={closeNameModal} onSave={renameMyScores} />
+
       {/* Footer Links */}
       <div className={`fixed bottom-3 left-0 w-full justify-center lg:bottom-6 lg:left-6 lg:w-auto lg:justify-start z-50 ${(gameState === 'start' && !showScoreboard) ? 'flex' : 'hidden lg:flex'} items-center gap-4 text-[10px] sm:text-xs font-medium text-zinc-400`}>
+        <DisplayNameButton name={displayName} onClick={() => { audio.playClick(); setShowNameModal(true); }} className="sm:hidden font-bold text-zinc-500" />
         <Link to="/terms" className="hover:text-zinc-900 transition-colors">Terms of Service</Link>
         <Link to="/privacy" className="hover:text-zinc-900 transition-colors">Privacy Policy</Link>
         <button 
@@ -1143,7 +1304,16 @@ export default function App() {
         >
            {soundEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
         </button>
+        <button
+          onClick={() => { audio.playClick(); setShowHowToPlay(true); }}
+          className="hover:text-zinc-900 transition-colors flex items-center cursor-pointer"
+          aria-label="How to play"
+          aria-controls="how-to-play"
+        >
+          <CircleHelp size={14} />
+        </button>
       </div>
+      <HowToPlay edition={gameEdition} open={showHowToPlay} onClose={closeHowToPlay} />
 
       {/* Main Content Area */}
       <div className="flex-1 w-full flex flex-col items-center justify-center relative p-4 md:p-8">
@@ -1153,12 +1323,12 @@ export default function App() {
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-0">
             <AnimatePresence mode="wait">
               {gameState === 'start' && (
-                <div className="relative w-full h-full lg:w-[90vw] lg:max-w-[750px] lg:h-[65vh] lg:min-h-[450px] lg:max-h-[550px] flex items-center justify-center pointer-events-none">
+                <div className="relative w-full h-full lg:w-[90vw] lg:max-w-[810px] lg:h-[65vh] lg:min-h-[450px] lg:max-h-[594px] flex items-center justify-center pointer-events-none">
                   {gameEdition === 'crest' && showCrestGame ? (
                     <React.Suspense fallback={<div className="text-white/50 text-[10px] tracking-[0.2em] uppercase font-bold">Loading badges…</div>}>
                       <CrestGame
                         hasPlayedToday={hasPlayedColorSportToday}
-                        playerName={playerName}
+                        playerName={displayName}
                         onPlayedToday={() => setHasPlayedColorSportToday(true)}
                         onExit={() => setShowCrestGame(false)}
                         onReturnHome={() => {
@@ -1170,9 +1340,10 @@ export default function App() {
                       />
                     </React.Suspense>
                   ) : gameEdition === 'flag' && showFlagGame ? (
+                    <React.Suspense fallback={<div className="text-white/50 text-[10px] tracking-[0.2em] uppercase font-bold">Loading flags…</div>}>
                     <FlagGame
                       hasPlayedToday={hasPlayedFlagToday}
-                      playerName={playerName}
+                      playerName={displayName}
                       onPlayedToday={() => setHasPlayedFlagToday(true)}
                       onExit={() => setShowFlagGame(false)}
                       onReturnHome={() => {
@@ -1182,6 +1353,7 @@ export default function App() {
                         setGameEdition('duo');
                       }}
                     />
+                    </React.Suspense>
                   ) : (
                   <AnimatePresence mode="wait">
                     {gameEdition === 'duo' ? (
@@ -1191,7 +1363,7 @@ export default function App() {
                         animate={{ clipPath: 'circle(150% at 50% 100%)', scale: 1, y: 0 }}
                         exit={{ clipPath: 'circle(0% at 50% 100%)', scale: 1.1, y: -50, zIndex: 10 }}
                         transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
-                        className="w-full h-full fixed inset-0 lg:relative lg:w-[90vw] lg:max-w-[750px] lg:h-[65vh] lg:min-h-[450px] lg:max-h-[550px] bg-black lg:rounded-[2.5rem] shadow-2xl flex flex-col items-center justify-center p-6 lg:p-10 overflow-hidden pointer-events-auto border border-zinc-800"
+                        className="w-full h-full fixed inset-0 lg:relative lg:w-[90vw] lg:max-w-[810px] lg:h-[65vh] lg:min-h-[450px] lg:max-h-[594px] bg-black lg:rounded-[2.5rem] shadow-2xl flex flex-col items-center justify-center p-6 lg:p-10 overflow-hidden pointer-events-auto border border-zinc-800"
                         style={{ transformStyle: 'preserve-3d' }}
                       >
                         {/* Subtle glow effect */}
@@ -1211,7 +1383,7 @@ export default function App() {
                             myUserIds={getMyUserIds()}
                             myBestScore={myBestScore}
                             stats={myStats}
-                            playerName={playerName}
+                            playerName={displayName}
                             onRename={renameMyScores}
                             canRename={myStats !== null && myStats.played > 0}
                             onPlayToday={() => {
@@ -1226,7 +1398,7 @@ export default function App() {
                                   setRoundData(parsed.roundData || []);
                                   setRound(parsed.roundData ? parsed.roundData.length : 4);
                                   setGameMode('duo');
-                                  setGameState('final');
+                                  loadIcons(savedRoundIcons(parsed)).then(() => setGameState('final'));
                                 }
                               } else {
                                 setTotalScore(0);
@@ -1275,7 +1447,7 @@ export default function App() {
                                           setRoundData(parsed.roundData || []);
                                           setRound(parsed.roundData ? parsed.roundData.length : 4);
                                           setGameMode('duo');
-                                          setGameState('final');
+                                          loadIcons(savedRoundIcons(parsed)).then(() => setGameState('final'));
                                         }
                                       } else {
                                         setTotalScore(0);
@@ -1329,7 +1501,7 @@ export default function App() {
                         animate={{ clipPath: 'circle(150% at 50% 100%)', scale: 1, y: 0 }}
                         exit={{ clipPath: 'circle(0% at 50% 100%)', scale: 1.1, y: -50, zIndex: 10 }}
                         transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
-                        className="w-full h-full fixed inset-0 lg:relative lg:w-[90vw] lg:max-w-[750px] lg:h-[65vh] lg:min-h-[450px] lg:max-h-[550px] bg-white lg:rounded-[2.5rem] shadow-2xl flex flex-col items-center justify-center p-6 lg:p-10 overflow-hidden pointer-events-auto border border-zinc-100"
+                        className="w-full h-full fixed inset-0 lg:relative lg:w-[90vw] lg:max-w-[810px] lg:h-[65vh] lg:min-h-[450px] lg:max-h-[594px] bg-white lg:rounded-[2.5rem] shadow-2xl flex flex-col items-center justify-center p-6 lg:p-10 overflow-hidden pointer-events-auto border border-zinc-100"
                       >
                         {showScoreboard ? (
                           <Leaderboard
@@ -1345,7 +1517,7 @@ export default function App() {
                             myUserIds={getMyUserIds()}
                             myBestScore={myBestScore}
                             stats={myStats}
-                            playerName={playerName}
+                            playerName={displayName}
                             onRename={renameMyScores}
                             canRename={myStats !== null && myStats.played > 0}
                             onPlayToday={() => {
@@ -1360,7 +1532,7 @@ export default function App() {
                                   setRoundData(parsed.roundData || []);
                                   setRound(parsed.roundData ? parsed.roundData.length : 4);
                                   setGameMode('daily');
-                                  setGameState('final');
+                                  loadIcons(savedRoundIcons(parsed)).then(() => setGameState('final'));
                                 }
                               } else {
                                 trackGameStart('Classic - Daily');
@@ -1408,7 +1580,7 @@ export default function App() {
                                           setRoundData(parsed.roundData || []);
                                           setRound(parsed.roundData ? parsed.roundData.length : 4);
                                           setGameMode('daily');
-                                          setGameState('final');
+                                          loadIcons(savedRoundIcons(parsed)).then(() => setGameState('final'));
                                         }
                                       } else {
                                         trackGameStart('Classic - Daily');
@@ -1463,7 +1635,7 @@ export default function App() {
                         animate={{ clipPath: 'circle(150% at 50% 100%)', scale: 1, y: 0 }}
                         exit={{ clipPath: 'circle(0% at 50% 100%)', scale: 1.1, y: -50, zIndex: 10 }}
                         transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
-                        className="w-full h-full fixed inset-0 lg:relative lg:w-[90vw] lg:max-w-[750px] lg:h-[65vh] lg:min-h-[450px] lg:max-h-[550px] lg:rounded-[2.5rem] shadow-2xl flex flex-col items-center justify-center p-6 lg:p-10 overflow-hidden pointer-events-auto border border-zinc-800"
+                        className="w-full h-full fixed inset-0 lg:relative lg:w-[90vw] lg:max-w-[810px] lg:h-[65vh] lg:min-h-[450px] lg:max-h-[594px] lg:rounded-[2.5rem] shadow-2xl flex flex-col items-center justify-center p-6 lg:p-10 overflow-hidden pointer-events-auto border border-zinc-800"
                         style={{
                           transformStyle: 'preserve-3d',
                           background: 'radial-gradient(120% 90% at 50% 0%, #123a28 0%, #08180f 58%, #030705 100%)',
@@ -1516,7 +1688,7 @@ export default function App() {
                             </div>
 
                             {leaderboardView === 'stats' ? (
-                              <FlagStatsPanel stats={colorSportStats} playerName={playerName} onRename={renameMyScores} />
+                              <FlagStatsPanel stats={colorSportStats} playerName={displayName} onRename={renameMyScores} />
                             ) : (
                               <>
                                 {colorSportLeaderboard.length > 0 && (
@@ -1599,7 +1771,7 @@ export default function App() {
                         animate={{ clipPath: 'circle(150% at 50% 100%)', scale: 1, y: 0 }}
                         exit={{ clipPath: 'circle(0% at 50% 100%)', scale: 1.1, y: -50, zIndex: 10 }}
                         transition={{ duration: 0.8, ease: [0.22, 1, 0.36, 1] }}
-                        className="w-full h-full fixed inset-0 lg:relative lg:w-[90vw] lg:max-w-[750px] lg:h-[65vh] lg:min-h-[450px] lg:max-h-[550px] lg:rounded-[2.5rem] shadow-2xl flex flex-col items-center justify-center p-6 lg:p-10 overflow-hidden pointer-events-auto border border-zinc-800"
+                        className="w-full h-full fixed inset-0 lg:relative lg:w-[90vw] lg:max-w-[810px] lg:h-[65vh] lg:min-h-[450px] lg:max-h-[594px] lg:rounded-[2.5rem] shadow-2xl flex flex-col items-center justify-center p-6 lg:p-10 overflow-hidden pointer-events-auto border border-zinc-800"
                         style={{
                           transformStyle: 'preserve-3d',
                           background: 'radial-gradient(120% 90% at 50% 0%, #14203a 0%, #0a0e18 60%, #05070d 100%)',
@@ -1675,7 +1847,7 @@ export default function App() {
                             </div>
 
                             {leaderboardView === 'stats' ? (
-                              <FlagStatsPanel stats={flagStats} playerName={playerName} onRename={renameMyScores} />
+                              <FlagStatsPanel stats={flagStats} playerName={displayName} onRename={renameMyScores} />
                             ) : (
                               <>
                                 {flagLeaderboard.length > 0 && (
@@ -1737,6 +1909,7 @@ export default function App() {
                         ) : (
                           <div className="flex flex-col lg:flex-row h-full items-center justify-start lg:justify-center w-full max-w-2xl gap-4 lg:gap-6 relative z-10 pt-10 sm:pt-0">
 
+                            <React.Suspense fallback={<div className="text-white/40 text-[10px] tracking-[0.2em] uppercase font-bold">Loading flags…</div>}>
                             {flagIntroLayout === 'current' ? (
                               <>
                                 {/* display:contents on mobile so the ring can sit between the copy and the CTA */}
@@ -1813,6 +1986,7 @@ export default function App() {
                                 }}
                               />
                             )}
+                            </React.Suspense>
                           </div>
                         )}
                       </motion.div>
@@ -1915,7 +2089,7 @@ export default function App() {
                   animate={{ opacity: 1, scale: 1, y: 0 }}
                   exit={{ opacity: 0, scale: 0.95, y: -20 }}
                   transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-                  className={`w-full h-full fixed inset-0 lg:relative lg:w-[90vw] lg:max-w-[750px] lg:h-[65vh] lg:min-h-[450px] lg:max-h-[550px] bg-black backdrop-blur-2xl flex flex-col items-center justify-center shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] lg:rounded-[2.5rem] overflow-hidden pointer-events-auto border border-white/10`}
+                  className={`w-full h-full fixed inset-0 lg:relative lg:w-[90vw] lg:max-w-[810px] lg:h-[65vh] lg:min-h-[450px] lg:max-h-[594px] ${gameMode.startsWith('duo') ? 'bg-black' : 'bg-[#1A1A1B]'} backdrop-blur-2xl flex flex-col items-center justify-center shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] lg:rounded-[2.5rem] overflow-hidden pointer-events-auto border border-white/10`}
                 >
                   {/* Round Info: Top Left */}
                   <div className="absolute top-16 sm:top-6 left-6 text-white text-xs tracking-widest uppercase">
@@ -1923,14 +2097,16 @@ export default function App() {
                   </div>
 
                   {/* Top Right: Score and Observe Text */}
+                  {gameMode.startsWith('duo') && (
                   <div className="absolute top-2 right-6 flex flex-col items-center text-right">
                     <div className={`text-4xl md:text-5xl font-bold text-white tracking-tighter transition-opacity duration-200 ${countdown > 0 ? 'opacity-100' : 'opacity-0'}`}>
                       {countdown > 0 ? countdown : 5}
                     </div>
                     <div className={`text-xs text-zinc-400 tracking-widest mt-1 transition-opacity duration-200 ${countdown > 0 ? 'opacity-100' : 'opacity-0'}`}>
-                      {gameMode.startsWith('duo') ? 'Seconds to observe the Shapes and Colors' : 'Seconds to observe the Shape and Color'}
+                      Seconds to observe the Shapes and Colors
                     </div>
                   </div>
+                  )}
 
                   {gameMode.startsWith('duo') ? (
                     <div className="flex gap-12 md:gap-24 items-center justify-center w-full h-full">
@@ -1972,22 +2148,140 @@ export default function App() {
                       </div>
                     </div>
                   ) : (
-                    <div className="w-40 h-40 md:w-56 md:h-56">
-                      <TargetIcon
-                        className="w-full h-full drop-shadow-[0_20px_50px_rgba(0,0,0,0.1)]"
-                        style={{ color: hsbToString(targetColor) }}
-                      />
-                    </div>
+                    <>
+                      {/* Countdown is drawn around the shape, so the eye never leaves it. */}
+                      <div className="relative grid place-items-center w-[min(62vmin,300px)] aspect-square">
+                        <svg className="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 100 100" aria-hidden>
+                          <circle cx="50" cy="50" r="46" fill="none" stroke="rgba(255,255,255,.09)" strokeWidth="2.5" />
+                          <circle cx="50" cy="50" r="46" fill="none" stroke={hsbToString(targetColor)} strokeWidth="2.5" strokeLinecap="round"
+                            strokeDasharray={2 * Math.PI * 46} strokeDashoffset={2 * Math.PI * 46 * memoProgress} />
+                        </svg>
+                        <TargetIcon
+                          className="w-[42%] h-[42%] drop-shadow-[0_20px_50px_rgba(0,0,0,0.1)]"
+                          style={{ color: hsbToString(targetColor) }}
+                        />
+                      </div>
+                      <div className="absolute bottom-[clamp(14px,4vh,28px)] left-1/2 -translate-x-1/2 text-[10px] tracking-[0.18em] uppercase font-bold text-zinc-600 tabular-nums whitespace-nowrap">
+                        {countdown}s — shape and color
+                      </div>
+                    </>
                   )}
                 </motion.div>
               )}
-              {gameState === 'recreate' && (
+              {gameState === 'pick' && (
+                <motion.div
+                  key="pick"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.3 }}
+                  className={`w-full h-full fixed inset-0 lg:relative lg:w-[90vw] lg:max-w-[810px] lg:h-[65vh] lg:min-h-[450px] lg:max-h-[594px] bg-[#1A1A1B] backdrop-blur-2xl flex flex-col px-4 sm:px-6 pt-24 sm:pt-16 pb-6 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] lg:rounded-[2.5rem] overflow-hidden pointer-events-auto border border-white/10`}
+                >
+                  <div className="absolute top-16 sm:top-6 left-6 text-white text-xs tracking-widest uppercase">
+                    {round}/4
+                  </div>
+                  <div className="absolute top-16 sm:top-6 left-1/2 -translate-x-1/2 text-white/60 text-[9px] sm:text-[10px] tracking-[0.2em] sm:tracking-[0.3em] uppercase font-bold whitespace-nowrap pointer-events-none">
+                    Which shape was it?
+                  </div>
+                  <div className="flex-1 min-h-0 grid grid-cols-[repeat(auto-fit,minmax(56px,1fr))] content-center gap-2 sm:gap-3 overflow-y-auto hide-scrollbar">
+                    {currentOptions.map((optionIndex) => {
+                      const ShapeIcon = OBJECTS[optionIndex];
+                      return (
+                        <button
+                          key={optionIndex}
+                          aria-label="Shape option"
+                          onClick={() => {
+                            audio.playShapeSliderTick();
+                            setUserObject(() => ShapeIcon);
+                            setGameState('recreate');
+                          }}
+                          className="aspect-square rounded-[22%] bg-[#26262C] text-[#7E7B8A] hover:bg-[#32323A] hover:text-[#C6C3D2] active:scale-90 grid place-items-center transition-all"
+                        >
+                          <ShapeIcon className="w-[52%] h-[52%]" />
+                        </button>
+                      );
+                    })}
+                  </div>
+                </motion.div>
+              )}
+              {gameState === 'recreate' && !gameMode.startsWith('duo') && (
+                <motion.div
+                  key="mix"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.3 }}
+                  className={`w-full h-full fixed inset-0 lg:relative lg:w-[90vw] lg:max-w-[810px] lg:h-[65vh] lg:min-h-[450px] lg:max-h-[594px] bg-[#1A1A1B] backdrop-blur-2xl flex flex-col px-4 sm:px-8 pt-24 sm:pt-16 pb-24 sm:pb-24 shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] lg:rounded-[2.5rem] overflow-hidden pointer-events-auto border border-white/10`}
+                >
+                  <div className="absolute top-16 sm:top-6 left-6 text-white text-xs tracking-widest uppercase z-20 pointer-events-none">
+                    {round}/4
+                  </div>
+                  <div className="absolute top-16 sm:top-6 left-1/2 -translate-x-1/2 text-white/60 text-[9px] sm:text-[10px] tracking-[0.2em] sm:tracking-[0.3em] uppercase font-bold z-20 whitespace-nowrap pointer-events-none">
+                    Which color was it?
+                  </div>
+                  {/* Shape above the bars when tall; side by side once the card is wider than tall. */}
+                  <div className="flex-1 min-h-0 flex flex-col landscape:flex-row items-center gap-4 sm:gap-6">
+                    <div className="flex-1 min-h-0 w-full grid place-items-center">
+                      <button
+                        onClick={() => { audio.playClick(); setGameState('pick'); }}
+                        aria-label="Change shape"
+                        className="group grid justify-items-center gap-2 sm:gap-3 p-2.5 rounded-3xl hover:bg-white/5 transition-colors"
+                      >
+                        <UserIcon
+                          className="w-[min(40vw,24vh,180px)] h-[min(40vw,24vh,180px)] transition-[color,transform] duration-200 group-hover:scale-105"
+                          style={{ color: hsbToString(userColor) }}
+                        />
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-white/20 bg-white/10 group-hover:bg-white/15 group-hover:border-white/40 text-[9.5px] tracking-[0.14em] uppercase font-bold text-zinc-200 whitespace-nowrap transition-colors">
+                          <ArrowLeftRight size={13} strokeWidth={2.4} />Tap to change shape
+                        </span>
+                      </button>
+                    </div>
+                    <div className="w-full landscape:max-w-[380px] grid gap-3 sm:gap-4">
+                      <HorizontalSlider
+                        label="Hue"
+                        suffix="°"
+                        value={userColor.h}
+                        max={360}
+                        type="H"
+                        onChange={(v) => setUserColor(prev => ({ ...prev, h: v }))}
+                        bg="linear-gradient(to right, #ff0000 0%, #ffff00 16.67%, #00ff00 33.33%, #00ffff 50%, #0000ff 66.67%, #ff00ff 83.33%, #ff0000 100%)"
+                      />
+                      <HorizontalSlider
+                        label="Saturation"
+                        value={userColor.s}
+                        max={100}
+                        type="S"
+                        onChange={(v) => setUserColor(prev => ({ ...prev, s: v }))}
+                        bg={`linear-gradient(to right, ${hsbToString({ ...userColor, s: 0 })}, ${hsbToString({ ...userColor, s: 100 })})`}
+                      />
+                      <HorizontalSlider
+                        label="Brightness"
+                        value={userColor.b}
+                        max={100}
+                        type="B"
+                        onChange={(v) => setUserColor(prev => ({ ...prev, b: v }))}
+                        bg={`linear-gradient(to right, #000, ${hsbToString({ ...userColor, b: 100 })})`}
+                      />
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      trackButtonClick('Lock it in');
+                      handleSubmit();
+                    }}
+                    className="absolute bottom-5 right-5 sm:bottom-7 sm:right-8 h-14 sm:h-16 px-6 sm:px-8 bg-white text-black hover:brightness-90 active:scale-[0.98] rounded-full text-sm sm:text-[15px] font-extrabold tracking-tight transition-all shadow-2xl"
+                  >
+                    Lock it in
+                  </button>
+                </motion.div>
+              )}
+              {gameState === 'recreate' && gameMode.startsWith('duo') && (
                 <motion.div
                   key="user-icon"
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  className={`w-full h-full fixed inset-0 lg:relative lg:w-[90vw] lg:max-w-[750px] lg:h-[65vh] lg:min-h-[450px] lg:max-h-[550px] bg-black backdrop-blur-2xl flex shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] lg:rounded-[2.5rem] overflow-hidden pointer-events-auto border border-white/10`}
+                  className={`w-full h-full fixed inset-0 lg:relative lg:w-[90vw] lg:max-w-[810px] lg:h-[65vh] lg:min-h-[450px] lg:max-h-[594px] bg-black backdrop-blur-2xl flex shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] lg:rounded-[2.5rem] overflow-hidden pointer-events-auto border border-white/10`}
                 >
                   {/* Left: Sliders */}
                   <div className="flex flex-shrink-0">
@@ -2026,7 +2320,7 @@ export default function App() {
                   <div className="flex-1 flex flex-col items-center justify-center relative">
                     {/* Match Text */}
                     <div className="absolute top-6 left-1/2 -translate-x-1/2 text-white/60 text-[8px] sm:text-[10px] tracking-[0.2em] sm:tracking-[0.3em] uppercase font-bold z-20 whitespace-nowrap pointer-events-none">
-                      {gameMode.startsWith('duo') ? 'Match the color' : 'Match the shape and color'}
+                      Match the color
                     </div>
                     <div className="w-24 h-24 sm:w-32 sm:h-32 md:w-48 md:h-48">
                       <UserIcon
@@ -2046,34 +2340,19 @@ export default function App() {
                       Continue
                     </button>
                   </div>
-
-                  {/* Right: Shapes */}
-                  {!gameMode.startsWith('duo') && (
-                    <div className="w-16 flex flex-col items-center gap-4 p-4 border-l border-white/10 overflow-y-auto hide-scrollbar">
-                      <div className="text-[8px] text-white/60 font-bold tracking-widest uppercase mb-2">Shape Slider</div>
-                      {currentOptions.map((optionIndex, i) => {
-                        const ShapeIcon = OBJECTS[optionIndex];
-                        return (
-                          <button
-                            key={i}
-                            onClick={() => {
-                              if (userObject !== ShapeIcon) {
-                                audio.playShapeSliderTick();
-                                setUserObject(() => ShapeIcon);
-                              }
-                            }}
-                            className={`w-10 h-10 flex-shrink-0 flex items-center justify-center transition-all ${userObject === ShapeIcon ? 'text-white' : 'text-zinc-600 hover:text-zinc-400'}`}
-                          >
-                            <ShapeIcon size={24} />
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
                 </motion.div>
               )}
             </AnimatePresence>
           </div>
+        )}
+
+        {shutter && (
+          <motion.div
+            className="fixed inset-0 z-[60] bg-[#0E0E0F] origin-center pointer-events-none"
+            initial={{ scaleY: 0 }}
+            animate={{ scaleY: [0, 1, 1, 0] }}
+            transition={{ duration: 0.42, times: [0, 0.38, 0.62, 1], ease: [0.7, 0, 0.3, 1] }}
+          />
         )}
 
         {/* UI Overlays */}
@@ -2105,15 +2384,77 @@ export default function App() {
               <></>
             )}
 
+            {/* STATE: RESULT (Classic, bands) */}
+            {gameState === 'result' && BAND_RESULT && (() => {
+              const tInk = inkOn(targetColor), uInk = inkOn(userColor);
+              const wrongShape = targetObject !== userObject;
+              return (
+                <motion.div
+                  key="result-bands"
+                  initial={{ opacity: 0, scale: 0.95, y: 40 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95, y: -40 }}
+                  transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+                  className="w-full h-full fixed inset-0 lg:relative lg:w-[90vw] lg:max-w-[810px] lg:h-[65vh] lg:min-h-[450px] lg:max-h-[594px] grid grid-rows-2 [container-type:size] shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] lg:rounded-[2.5rem] overflow-hidden pointer-events-auto border border-white/10"
+                >
+                  <div className="relative grid place-items-center overflow-hidden" style={{ background: hsbToString(targetColor), color: tInk }}>
+                    <div className="absolute top-16 sm:top-[clamp(16px,4cqh,28px)] left-[clamp(16px,4.5cqw,30px)] text-[11px] font-bold tracking-[0.12em] uppercase opacity-60">
+                      Round {round} / 4
+                    </div>
+                    <div className="absolute top-14 sm:top-[clamp(8px,2.4cqh,20px)] right-[clamp(16px,4.5cqw,30px)] grid gap-0.5 justify-items-end text-right">
+                      <b className="text-[min(14cqmin,64px)] font-extrabold leading-[0.84] tracking-[-0.05em] tabular-nums">
+                        <AnimatedScore value={score} onComplete={() => {
+                          setTimeout(() => {
+                            setShowScoreText(true);
+                            audio.playScoreReveal();
+                          }, 150);
+                        }} />
+                        <i className="not-italic text-[min(5.9cqmin,27px)] opacity-55 tracking-[-0.02em]"> / 25</i>
+                      </b>
+                      <span className={`text-[clamp(11px,2.7cqmin,14px)] italic transition-all duration-300 ${showScoreText ? 'opacity-75 translate-y-0' : 'opacity-0 translate-y-1.5'}`}>
+                        {getScoreText(score)}
+                      </span>
+                    </div>
+                    <TargetIcon className="w-[min(18cqmin,84px)] h-[min(18cqmin,84px)]" />
+                    <div className="absolute left-[clamp(16px,4.5cqw,30px)] right-[clamp(16px,4.5cqw,30px)] bottom-[clamp(13px,3.4cqh,26px)] grid gap-0.5">
+                      <div className="text-[10px] tracking-[0.16em] uppercase font-bold opacity-60">Shown</div>
+                      <div className="text-[clamp(11px,2.9cqmin,15px)] font-bold tracking-tight tabular-nums">H{targetColor.h} S{targetColor.s} B{targetColor.b}</div>
+                    </div>
+                  </div>
+                  <motion.div
+                    className="relative grid place-items-center overflow-hidden"
+                    style={{ background: hsbToString(userColor), color: uInk }}
+                    initial={{ clipPath: 'inset(100% 0 0 0)' }}
+                    animate={{ clipPath: 'inset(0% 0 0 0)' }}
+                    transition={{ duration: 0.42, ease: [0.22, 1, 0.36, 1] }}
+                  >
+                    <UserIcon className="w-[min(18cqmin,84px)] h-[min(18cqmin,84px)]" />
+                    <div className="absolute left-[clamp(16px,4.5cqw,30px)] right-[clamp(16px,4.5cqw,30px)] bottom-[clamp(13px,3.4cqh,26px)] grid gap-0.5">
+                      <div className="text-[10px] tracking-[0.16em] uppercase font-bold opacity-60">Your answer</div>
+                      <div className="text-[clamp(11px,2.9cqmin,15px)] font-bold tracking-tight tabular-nums">H{userColor.h} S{userColor.s} B{userColor.b}{wrongShape ? ' — wrong shape' : ''}</div>
+                    </div>
+                    <button
+                      onClick={handleNextRound}
+                      aria-label={round < 4 ? 'Next round' : 'See final score'}
+                      className="absolute right-[clamp(16px,4.5cqw,30px)] bottom-[clamp(16px,4cqh,28px)] w-[clamp(52px,12cqmin,66px)] aspect-square rounded-full grid place-items-center active:scale-[0.93] transition-transform"
+                      style={{ background: uInk, color: hsbToString(userColor) }}
+                    >
+                      <ArrowRight className="w-[44%] h-[44%]" />
+                    </button>
+                  </motion.div>
+                </motion.div>
+              );
+            })()}
+
             {/* STATE: RESULT */}
-            {gameState === 'result' && (
+            {gameState === 'result' && !BAND_RESULT && (
               <motion.div
                 key="result"
                 initial={{ opacity: 0, scale: 0.95, y: 40 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: -40 }}
                 transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-                className="relative w-[90vw] max-w-[750px] h-[65vh] min-h-[450px] max-h-[550px] bg-black backdrop-blur-2xl flex flex-col items-center justify-center shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] rounded-[2.5rem] overflow-hidden pointer-events-auto border border-white/10 p-8 md:p-12"
+                className="relative w-[90vw] max-w-[810px] h-[65vh] min-h-[450px] max-h-[594px] bg-black backdrop-blur-2xl flex flex-col items-center justify-center shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] rounded-[2.5rem] overflow-hidden pointer-events-auto border border-white/10 p-8 md:p-12"
               >
                 {/* Round Info: Top Left */}
                 <div className="absolute top-16 sm:top-6 left-6 text-white text-xs tracking-widest uppercase z-20">
@@ -2186,13 +2527,13 @@ export default function App() {
                 animate={{ opacity: 1, scale: 1, rotate: 0 }}
                 exit={{ opacity: 0, scale: 1.1, rotate: 2 }}
                 transition={{ type: "spring", damping: 20, stiffness: 100 }}
-                className="w-full h-full fixed inset-0 overflow-y-auto lg:relative lg:w-[90vw] lg:max-w-[750px] lg:h-auto lg:min-h-[450px] lg:overflow-hidden bg-black backdrop-blur-2xl flex flex-col items-center justify-center shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] lg:rounded-[2.5rem] pointer-events-auto border border-white/10 py-12 px-6 md:px-12"
+                className="w-full h-full fixed inset-0 overflow-y-auto lg:relative lg:w-[90vw] lg:max-w-[810px] lg:h-auto lg:min-h-[450px] lg:overflow-hidden bg-black backdrop-blur-2xl flex flex-col items-center justify-center shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] lg:rounded-[2.5rem] pointer-events-auto border border-white/10 py-12 px-6 md:px-12"
               >
                 <button
                   onClick={() => { audio.playClick(); setGameState('start'); }}
                   className="absolute top-6 right-6 p-4 text-white hover:opacity-70 transition-opacity z-10"
                 >
-                  <FaIcons.FaTimes size={24} />
+                  <FaTimes size={24} />
                 </button>
 
                 <p className="text-white text-[10px] tracking-[0.3em] uppercase font-bold mb-4 opacity-50">Total Mastery</p>

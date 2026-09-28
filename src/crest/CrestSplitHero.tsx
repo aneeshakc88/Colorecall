@@ -1,4 +1,4 @@
-// Color-sport intro — copy left, the day's first badge (wearing its wrong colour)
+// Football Logo intro — copy left, the day's first badge (wearing its wrong colour)
 // right, the rest of the day's badges drifting behind as a quiet ribbon. Same
 // split-hero shape as FlagSplitHero, dressed as a pitch instead of an atlas.
 import { useMemo } from 'react';
@@ -90,7 +90,7 @@ export const CrestSplitHero = ({ onPlay, playersToday, playedToday }: Props) => 
             {dailyKicker()}
           </span>
           <h1 className="cs-title mt-2 lg:mt-3 text-[clamp(1.85rem,8.5vw,2.75rem)] lg:text-5xl font-black tracking-tighter leading-none">
-            Color-sport
+            Football Logo
           </h1>
           <p className="mt-1.5 lg:mt-3 text-[clamp(0.75rem,3.4vw,1rem)] font-semibold text-[#9ec4b1]">
             One colour is wrong on the badge — slide it back

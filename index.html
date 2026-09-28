@@ -9,31 +9,39 @@
     
     <!-- Open Graph / Facebook -->
     <meta property="og:type" content="website" />
-    <meta property="og:url" content="https://colorecall.com/" />
+    <meta property="og:url" content="https://www.colorecall.com/" />
     <meta property="og:title" content="Color Memory Game | Daily Color Game - Colorecall" />
     <meta property="og:description" content="Play the color memory game. We show you colors, you recreate them from memory. Colorecall is the ultimate color memory game. Play colors game today!" />
-    <meta property="og:image" content="https://colorecall.com/logo-transparent.png" />
+    <meta property="og:image" content="https://www.colorecall.com/logo-og.png" />
 
     <!-- Twitter -->
     <meta property="twitter:card" content="summary_large_image" />
-    <meta property="twitter:url" content="https://colorecall.com/" />
+    <meta property="twitter:url" content="https://www.colorecall.com/" />
     <meta property="twitter:title" content="Color Memory Game | Daily Color Game - Colorecall" />
     <meta property="twitter:description" content="Play the color memory game. We show you colors, you recreate them from memory. Colorecall is the ultimate color memory game. Play colors game today!" />
-    <meta property="twitter:image" content="https://colorecall.com/logo-transparent.png" />
+    <meta property="twitter:image" content="https://www.colorecall.com/logo-og.png" />
 
     <!-- Favicon -->
-    <link rel="icon" type="image/png" href="/logo-transparent.png" />
-    <link rel="apple-touch-icon" href="/logo-transparent.png" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/logo-192.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />
 
     <!-- Google tag (gtag.js) -->
-    <script async src="https://www.googletagmanager.com/gtag/js?id=G-8N1HNXP1BP"></script>
     <script>
       window.dataLayer = window.dataLayer || [];
       function gtag(){dataLayer.push(arguments);}
       gtag('js', new Date());
 
       gtag('config', 'G-8N1HNXP1BP');
+      // gtag.js (~170KB) loads after the page so it doesn't compete with the game for bandwidth;
+      // calls made before then queue in dataLayer and are sent once it arrives.
+      addEventListener('load', function () {
+        var s = document.createElement('script');
+        s.async = true;
+        s.src = 'https://www.googletagmanager.com/gtag/js?id=G-8N1HNXP1BP';
+        document.head.appendChild(s);
+      });
     </script>
   </head>
   <body>

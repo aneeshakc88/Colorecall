@@ -115,7 +115,76 @@ export const VerticalSlider = ({
   );
 };
 
-export const AnimatedScore = ({ value, onComplete }: { value: number, onComplete?: () => void }) => {
+// Horizontal so the colour above it stays clear of the player's thumb.
+export const HorizontalSlider = ({
+  label, value, max, onChange, bg, type, suffix = ''
+}: {
+  label: string, value: number, max: number, onChange: (v: number) => void, bg: string, type: 'H' | 'S' | 'B', suffix?: string
+}) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const lastSoundTime = useRef<number>(0);
+
+  const set = (newValue: number) => {
+    if (newValue === value) return;
+    onChange(newValue);
+    const now = performance.now();
+    if (now - lastSoundTime.current > 40) {
+      audio.playColorSliderTick(type);
+      lastSoundTime.current = now;
+    }
+  };
+
+  const handlePointerEvent = (e: React.PointerEvent) => {
+    if (!containerRef.current) return;
+    if (e.type === 'pointerdown') {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    }
+    const rect = containerRef.current.getBoundingClientRect();
+    // Knob is a circle the height of the track, so its centre only travels between the inset ends.
+    const span = rect.width - rect.height;
+    const frac = span > 0 ? (e.clientX - rect.left - rect.height / 2) / span : 0;
+    set(Math.round(Math.max(0, Math.min(1, frac)) * max));
+  };
+
+  const handleKey = (e: React.KeyboardEvent) => {
+    const dir = e.key === 'ArrowRight' || e.key === 'ArrowUp' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowDown' ? -1 : 0;
+    if (!dir) return;
+    e.preventDefault();
+    set(Math.max(0, Math.min(max, value + dir * (e.shiftKey ? 10 : 1))));
+  };
+
+  return (
+    <div className="grid gap-1.5">
+      <div className="flex justify-between items-baseline text-[10px] sm:text-[11px] tracking-[0.16em] uppercase font-bold text-zinc-600">
+        <span>{label}</span>
+        <b className="text-xs sm:text-[13px] tracking-normal text-zinc-400 font-semibold tabular-nums">{value}{suffix}</b>
+      </div>
+      <div
+        ref={containerRef}
+        className="relative h-10 sm:h-12 rounded-full cursor-ew-resize touch-none select-none border border-white/10"
+        style={{ background: bg }}
+        role="slider"
+        tabIndex={0}
+        aria-label={label}
+        aria-valuemin={0}
+        aria-valuemax={max}
+        aria-valuenow={value}
+        onPointerDown={handlePointerEvent}
+        onPointerMove={(e) => e.buttons > 0 && handlePointerEvent(e)}
+        onKeyDown={handleKey}
+      >
+        <div className="absolute inset-y-0 left-5 right-5 sm:left-6 sm:right-6 pointer-events-none">
+          <div
+            className="absolute top-1/2 w-10 h-10 sm:w-12 sm:h-12 -translate-x-1/2 -translate-y-1/2 bg-white rounded-full shadow-[0_2px_10px_rgba(0,0,0,0.6)] border-2 border-white/90 z-10"
+            style={{ left: `${(value / max) * 100}%` }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export const AnimatedScore =({ value, onComplete }: { value: number, onComplete?: () => void }) => {
   const [displayValue, setDisplayValue] = useState(0);
   const lastTickTime = useRef(0);
   const onCompleteRef = useRef(onComplete);

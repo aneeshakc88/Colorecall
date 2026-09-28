@@ -235,7 +235,7 @@ export default function FlagGame({ hasPlayedToday: _hasPlayedToday, onPlayedToda
         deviceType: getDeviceType(),
         userId: getUserId(),
         userType: getUserType(),
-        name: playerName || 'BB',
+        name: playerName,
         isPosted: true,
       });
     } catch (e) {
