@@ -1,5 +1,5 @@
 import { CRESTS_DATA } from './crests-data';
-import { makeWrongHex, seededRand } from '../flag/flag-core';
+import { makeWrongHex, seededRand } from '../flag/wrong-color';
 import { Color, hsbToRgb } from '../utils/colorMath';
 import { getCurrentCycle } from '../daily-cycle';
 

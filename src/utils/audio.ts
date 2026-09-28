@@ -90,6 +90,11 @@ class AudioEngine {
     this.playTone(880, 'sine', 0.2, 0.5); // A5
   }
 
+  // Recall's memorize tick: short soft sine, 0.1 here since masterGain halves it.
+  public playMemoTick() {
+    this.playTone(700, 'sine', 0.03, 0.1);
+  }
+
   // Tick for the 5-second memorization (mechanical clock tick)
   public playTick() {
     if (!this.isEnabled) return;

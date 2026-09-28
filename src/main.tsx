@@ -12,7 +12,7 @@ createRoot(document.getElementById('root')!).render(
     <ErrorBoundary>
       <BrowserRouter>
         <Routes>
-          <Route path="/" element={<App />} />
+          <Route path="/:mode?" element={<App />} />
           <Route path="/terms" element={<Terms />} />
           <Route path="/privacy" element={<Privacy />} />
         </Routes>

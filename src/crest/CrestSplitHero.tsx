@@ -1,12 +1,14 @@
-// Color-sport intro — copy left, the day's first badge (wearing its wrong colour)
+// Football Logo intro — copy left, the day's first badge (wearing its wrong colour)
 // right, the rest of the day's badges drifting behind as a quiet ribbon. Same
 // split-hero shape as FlagSplitHero, dressed as a pitch instead of an atlas.
 import { useMemo } from 'react';
+import { Trophy } from 'lucide-react';
 import { getDailyCrestPuzzle } from './crest-core';
 import { swapRegion, viewBoxRatio } from '../flag/flag-highlight';
 
 type Props = {
   onPlay: () => void;
+  onLeaderboard: () => void;
   playersToday: number;
   playedToday: boolean;
 };
@@ -44,7 +46,7 @@ const Ribbon = ({ crests, reverse, duration, className }: { crests: string[]; re
   );
 };
 
-export const CrestSplitHero = ({ onPlay, playersToday, playedToday }: Props) => {
+export const CrestSplitHero = ({ onPlay, onLeaderboard, playersToday, playedToday }: Props) => {
   const rounds = useMemo(() => getDailyCrestPuzzle(), []);
   const heroRound = rounds[0]!;
   const heroUri = useMemo(
@@ -90,21 +92,31 @@ export const CrestSplitHero = ({ onPlay, playersToday, playedToday }: Props) => 
             {dailyKicker()}
           </span>
           <h1 className="cs-title mt-2 lg:mt-3 text-[clamp(1.85rem,8.5vw,2.75rem)] lg:text-5xl font-black tracking-tighter leading-none">
-            Color-sport
+            Football Logo
           </h1>
           <p className="mt-1.5 lg:mt-3 text-[clamp(0.75rem,3.4vw,1rem)] font-semibold text-[#9ec4b1]">
             One colour is wrong on the badge — slide it back
           </p>
         </div>
 
-        <div className="order-4 cs-cta shrink-0 w-full sm:w-52 relative p-[5px] rounded-[1.2rem] overflow-hidden hover:scale-[1.03] active:scale-95 transition-all duration-300 group/glow" style={{ animation: 'cs-cta 2.6s ease-in-out infinite' }}>
-          <div className="absolute inset-[-500%] bg-[conic-gradient(from_0deg,#4ade80,#a3e635,#22d3ee,#34d399,#4ade80)] animate-spin-slow opacity-40 group-hover/glow:opacity-100 transition-opacity" />
+        <div className="order-4 shrink-0 w-full sm:w-auto flex items-stretch justify-center lg:justify-start gap-3">
+          <div className="cs-cta flex-1 sm:flex-none sm:w-52 relative p-[5px] rounded-[1.2rem] overflow-hidden hover:scale-[1.03] active:scale-95 transition-all duration-300 group/glow" style={{ animation: 'cs-cta 2.6s ease-in-out infinite' }}>
+            <div className="absolute inset-[-500%] bg-[conic-gradient(from_0deg,#4ade80,#a3e635,#22d3ee,#34d399,#4ade80)] animate-spin-slow opacity-40 group-hover/glow:opacity-100 transition-opacity" />
+            <button
+              onClick={onPlay}
+              className="relative z-10 w-full py-[clamp(0.6rem,1.8vh,1rem)] sm:py-4 bg-white text-black font-black rounded-2xl flex items-center justify-center text-base sm:text-xl transition-colors duration-300 overflow-hidden"
+            >
+              {playedToday ? 'See result' : 'Daily'}
+              <span className="cs-glint pointer-events-none absolute inset-y-0 -left-1/3 w-1/3 bg-gradient-to-r from-transparent via-white/70 to-transparent mix-blend-overlay" style={{ animation: 'cs-glint 4.2s ease-in-out infinite' }} />
+            </button>
+          </div>
+          {/* Below lg the card is full-screen and its top-right corner sits under the fixed header, so the trophy lives here */}
           <button
-            onClick={onPlay}
-            className="relative z-10 w-full py-[clamp(0.6rem,1.8vh,1rem)] sm:py-4 bg-white text-black font-black rounded-2xl flex items-center justify-center text-base sm:text-xl transition-colors duration-300 overflow-hidden"
+            onClick={onLeaderboard}
+            aria-label="Leaderboard"
+            className="lg:hidden shrink-0 px-4 sm:px-5 rounded-2xl border border-white/15 bg-white/[0.06] text-white flex items-center justify-center hover:bg-white/[0.12] active:scale-95 transition-all"
           >
-            {playedToday ? 'See result' : 'Daily'}
-            <span className="cs-glint pointer-events-none absolute inset-y-0 -left-1/3 w-1/3 bg-gradient-to-r from-transparent via-white/70 to-transparent mix-blend-overlay" style={{ animation: 'cs-glint 4.2s ease-in-out infinite' }} />
+            <Trophy size={22} />
           </button>
         </div>
 

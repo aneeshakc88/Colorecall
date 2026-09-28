@@ -4,7 +4,7 @@ import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { audio } from '../utils/audio';
 import { trackGameEnd } from '../analytics';
-import { Color, VerticalSlider, AnimatedScore, getUserId, getUserType, getDeviceType, generateSessionId } from '../utils/colorMath';
+import { Color, VerticalSlider, HorizontalSlider, AnimatedScore, getUserId, getUserType, getDeviceType, generateSessionId } from '../utils/colorMath';
 import { getDailyCrestPuzzle, hexToHsb, colorToHex, calcScore, CREST_MAX_PER_ROUND, type CrestRound } from './crest-core';
 import { getCurrentCycle, getNextResetTime, cycleDateLabel } from '../daily-cycle';
 import { swapRegion, regionOutlineRaster, applyOverlay, viewBoxRatio, type Raster } from '../flag/flag-highlight';
@@ -76,30 +76,19 @@ function useRegionOutline(svg: string | undefined, hex: string): string | null {
   return rastered?.key === key ? rastered.overlay : null;
 }
 
-const MAT_COLOR = '#808080';
-const MAT_RATIO = 0.05;
+const PANEL_PAD = 0.08;
 
 function CrestImg({ svg, hiddenHex, swapHex, height }: { svg: string; hiddenHex: string; swapHex: string; height: number }) {
   const overlay = useRegionOutline(svg, hiddenHex);
   let out = swapRegion(svg, hiddenHex, swapHex);
   out = applyOverlay(out, overlay);
   const ratio = viewBoxRatio(svg);
-  // Same neutral 18% grey mat as the flag daily: badges carry white and black
-  // regions alike, so no page background bounds all of them, and grey is the
-  // neutral ground for judging a colour.
-  const mat = Math.max(3, Math.round(height * MAT_RATIO));
+  // Charcoal panel keeps black edges of a badge readable against the black card.
+  const pad = Math.max(6, Math.round(height * PANEL_PAD));
   return (
-    <div
-      className="shrink-0 rounded-xl"
-      style={{
-        padding: mat,
-        background: MAT_COLOR,
-        boxShadow: '0 8px 30px rgba(0,0,0,0.5)',
-        maxWidth: '100%',
-      }}
-    >
+    <div className="shrink-0 rounded-2xl" style={{ padding: pad, background: '#1A1A1B', maxWidth: '100%' }}>
       <div
-        className="overflow-hidden rounded-md [&>svg]:block [&>svg]:h-full [&>svg]:w-full"
+        className="[&>svg]:block [&>svg]:h-full [&>svg]:w-full"
         style={{ height, width: Math.round(height * ratio), maxWidth: '100%' }}
         dangerouslySetInnerHTML={{ __html: out }}
       />
@@ -194,7 +183,7 @@ export default function CrestGame({ hasPlayedToday: _hasPlayedToday, onPlayedTod
         deviceType: getDeviceType(),
         userId: getUserId(),
         userType: getUserType(),
-        name: playerName || 'BB',
+        name: playerName,
         isPosted: true,
       });
     } catch (e) {
@@ -245,21 +234,20 @@ export default function CrestGame({ hasPlayedToday: _hasPlayedToday, onPlayedTod
       else if (r.score >= 11) grid += "🟧";
       else grid += "🟥";
     });
-    const text = `Color-sport Daily - ${dateStr}\nScore: ${totalScore}/${maxTotal}\n${grid}\nPlay at: https://www.colorecall.com/`;
+    const text = `Football Logo Daily - ${dateStr}\nScore: ${totalScore}/${maxTotal}\n${grid}\nPlay at: https://www.colorecall.com/football-logo`;
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   const crestRatio = round ? viewBoxRatio(round.crest.svg) : 1;
-  // /(1+2*MAT_RATIO): the mat sits outside `height`, so the badge shrinks to keep the framed card inside its box.
-  const crestHeight = Math.max(40, Math.min(boxH || 200, boxW ? boxW / crestRatio : 200) / (1 + 2 * MAT_RATIO));
+  const crestHeight = Math.max(40, Math.min(boxH || 200, boxW ? boxW / crestRatio : 200) / (1 + 2 * PANEL_PAD));
 
   if (phase === 'playing' && round) {
     return (
       <div className={CARD_PLAY} style={{ transformStyle: 'preserve-3d' }}>
         <div className="flex-1 flex overflow-hidden relative">
-          <div className="flex flex-shrink-0">
+          <div className="hidden lg:flex flex-shrink-0">
             <VerticalSlider
               value={color.h}
               max={360}
@@ -283,22 +271,50 @@ export default function CrestGame({ hasPlayedToday: _hasPlayedToday, onPlayedTod
             />
           </div>
 
-          <div className="absolute top-16 sm:top-6 left-32 sm:left-32 md:left-40 text-white text-xs tracking-widest uppercase z-20 pointer-events-none">
+          <div className="absolute top-6 sm:top-24 lg:top-6 left-6 lg:left-40 text-white text-xs tracking-widest uppercase z-20 pointer-events-none">
             {currentRound + 1}/{rounds.length}
           </div>
 
-          <div className="flex-1 flex flex-col items-center justify-center relative px-4">
-            <div className="absolute top-10 sm:top-12 left-1/2 -translate-x-1/2 text-white/60 text-xs sm:text-sm tracking-[0.15em] sm:tracking-[0.2em] uppercase font-bold z-20 text-center max-w-[80%]">
+          <div className="flex-1 min-w-0 flex flex-col items-center gap-4 relative px-4 sm:px-8 pt-14 sm:pt-32 pb-32 lg:p-4 lg:justify-center">
+            <div className="lg:absolute lg:top-12 lg:left-1/2 lg:-translate-x-1/2 text-white/60 text-xs sm:text-sm tracking-[0.15em] sm:tracking-[0.2em] uppercase font-bold z-20 text-center max-w-[80%]">
               Fix the wrong colour in the <span className="text-white">{round.crest.name}</span> badge
             </div>
 
-            <div ref={crestBoxRef} className="w-full max-w-[200px] sm:max-w-[260px] md:max-w-xs h-28 sm:h-36 md:h-44 flex items-center justify-center">
+            <div ref={crestBoxRef} className="w-full flex-1 min-h-0 lg:flex-none lg:max-w-xs lg:h-44 flex items-center justify-center">
               <CrestImg svg={round.crest.svg} hiddenHex={round.hiddenHex} swapHex={colorToHex(color)} height={crestHeight} />
+            </div>
+
+            <div className="w-full grid gap-3 lg:hidden">
+              <HorizontalSlider
+                label="Hue"
+                suffix="°"
+                value={color.h}
+                max={360}
+                type="H"
+                onChange={(v) => setColor(prev => ({ ...prev, h: v }))}
+                bg="linear-gradient(to right, #ff0000 0%, #ffff00 16.67%, #00ff00 33.33%, #00ffff 50%, #0000ff 66.67%, #ff00ff 83.33%, #ff0000 100%)"
+              />
+              <HorizontalSlider
+                label="Saturation"
+                value={color.s}
+                max={100}
+                type="S"
+                onChange={(v) => setColor(prev => ({ ...prev, s: v }))}
+                bg={`linear-gradient(to right, ${colorToHex({ h: color.h, s: 0, b: color.b })}, ${colorToHex({ h: color.h, s: 100, b: color.b })})`}
+              />
+              <HorizontalSlider
+                label="Brightness"
+                value={color.b}
+                max={100}
+                type="B"
+                onChange={(v) => setColor(prev => ({ ...prev, b: v }))}
+                bg={`linear-gradient(to right, #000, ${colorToHex({ h: color.h, s: color.s, b: 100 })})`}
+              />
             </div>
 
             <button
               onClick={handleSubmit}
-              className="absolute bottom-6 right-6 px-8 py-3 bg-white text-black hover:bg-zinc-200 active:scale-[0.95] rounded-xl text-sm font-bold tracking-tight transition-all duration-300 shadow-2xl"
+              className="absolute bottom-14 lg:bottom-6 right-6 px-8 py-3 bg-white text-black hover:bg-zinc-200 active:scale-[0.95] rounded-xl text-sm font-bold tracking-tight transition-all duration-300 shadow-2xl"
             >
               Submit
             </button>
@@ -313,11 +329,11 @@ export default function CrestGame({ hasPlayedToday: _hasPlayedToday, onPlayedTod
     return (
       <div className={CARD_PLAY} style={{ transformStyle: 'preserve-3d' }}>
         <div className="relative flex-1 flex flex-col items-center justify-center p-8 md:p-12">
-          <div className="absolute top-16 sm:top-6 left-6 text-white text-xs tracking-widest uppercase z-20">
+          <div className="absolute top-16 sm:top-28 lg:top-6 left-6 text-white text-xs tracking-widest uppercase z-20">
             {currentRound + 1}/{rounds.length}
           </div>
 
-          <div className="absolute top-6 right-6 flex flex-col items-end text-right">
+          <div className="absolute top-6 sm:top-24 lg:top-6 right-6 flex flex-col items-end text-right">
             <div className="flex items-baseline gap-1 mb-1">
               <h2 className="text-5xl md:text-6xl font-bold tracking-tighter leading-none text-white">
                 <AnimatedScore value={lastResult.score} onComplete={() => {
@@ -345,7 +361,7 @@ export default function CrestGame({ hasPlayedToday: _hasPlayedToday, onPlayedTod
           </div>
           <p className="text-white/50 text-[10px] uppercase tracking-widest font-bold">{lastResult.crestName}</p>
 
-          <div className="absolute bottom-6 right-6">
+          <div className="absolute bottom-14 lg:bottom-6 right-6">
             <button
               onClick={handleContinue}
               className="px-8 py-5 bg-white text-black rounded-2xl flex items-center justify-center hover:scale-105 active:scale-95 transition-all shadow-2xl shadow-white/20 font-bold text-lg"
@@ -369,7 +385,7 @@ export default function CrestGame({ hasPlayedToday: _hasPlayedToday, onPlayedTod
         <X size={24} />
       </button>
 
-      <p className="text-white text-[10px] tracking-[0.3em] uppercase font-bold mb-4 opacity-50">Color-sport Mastery</p>
+      <p className="text-white text-[10px] tracking-[0.3em] uppercase font-bold mb-4 opacity-50">Football Logo Mastery</p>
 
       <div className="flex items-baseline justify-center gap-2 mb-6">
         <h2 className="text-5xl md:text-6xl font-bold tracking-tighter leading-none text-white">

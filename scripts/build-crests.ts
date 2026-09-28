@@ -13,9 +13,35 @@ import { join } from 'node:path';
 import sharp from 'sharp';
 import { optimize, type Config } from 'svgo';
 import { regionOutlineRaster, type Raster } from '../src/flag/flag-highlight';
+import { flattenGradients } from './flatten-gradients';
+import { inlineClassStyles } from './inline-class-styles';
+import { clipRegion, lockOutsideRoundel } from './lock-outside-roundel';
 
 const REPO = 'FCLOGO/fclogo.top';
-const FEDS = ['theFA', 'RFEF', 'FIGC', 'DFB', 'FFF'];
+const FEDS = ['theFA', 'RFEF', 'FIGC', 'DFB', 'FFF', 'USSF'];
+// MLS enters as a hand-picked set of the best-known clubs, not the whole league.
+const USSF_KEEP = new Set([
+  'Inter Miami CF', 'LA Galaxy', 'LA FC', 'Seattle Sounders', 'Atlanta United', 'New York City',
+  'New York Red Bulls', 'Portland Timbers', 'Orlando City SC', 'Columbus Crew', 'FC Cincinnati', 'Chicago Fire',
+]);
+// Federations allowed the whole-unit precision fallback for badges over MAX_BYTES.
+const COARSE_FEDS = new Set(['theFA']);
+const COARSE_CLUBS = new Set(['RFEF-real-madrid']);
+// Badges whose rounds stay inside the central roundel; the ornament around it
+// (Real Madrid's crown) is never hidden.
+const ROUNDEL_ONLY = new Set(['RFEF-real-madrid']);
+// One colour's round narrowed further to a circle, in the absolute coords of the
+// 800-wide canvas: Real Madrid's blue is the diagonal band inside the white disc only.
+const REGION_CLIPS: Record<string, { hex: string; circle: [number, number, number] }> = {
+  'RFEF-real-madrid': { hex: '#004C98', circle: [400, 498.5, 199] },
+};
+// Marquee clubs whose gradients are flattened to solid colours instead of skipping the
+// badge. Hand-picked and reviewed: flattening loses the shading, which some badges
+// survive and some don't.
+const FLATTEN_CLUBS = new Set(['theFA-liverpool', 'theFA-man-united', 'theFA-bournemouth', 'RFEF-getafe']);
+// Flattened badges get a higher cap: Liverpool's clipped line art is still 23KB at
+// whole units.
+const FLATTEN_MAX_BYTES = 25_000;
 const CACHE = join(process.cwd(), '.crest-cache');
 const ART_BOTTOM = 755;   // crop height — clips the wordmark, clears the deepest art by 6px
 const MAX_BYTES = 15_000;
@@ -39,7 +65,7 @@ const MEASURE_W = 400;
 // FIGC-napoli: the upstream file declares only #000035 — Napoli's sky blue is simply
 // absent, so the badge renders as a navy outline and the round would ask for navy on
 // the one club everyone pictures in sky blue.
-const DUD_CLUBS = new Set(['RFEF-c-rdoba', 'FIGC-napoli']);
+const DUD_CLUBS = new Set(['RFEF-c-rdoba', 'FIGC-napoli', 'theFA-crystal-palace', 'theFA-leicester']);
 const DUD_REGIONS = new Set([
   'RFEF-eldense #FFFFFF',
   'RFEF-fc-andorra #FF0B10',
@@ -55,7 +81,21 @@ const DUD_REGIONS = new Set([
   'RFEF-santander #FFFFFF',
   'FIGC-venezia #FF6B00',
   'DFB-bochum #1456A2',
+  'theFA-everton #FFFFFF',
+  'theFA-man-united #F8C002',
+  'USSF-new-york-city #000229',
+  'USSF-new-york-city #000027',
+  'USSF-new-york-red-bulls #182852',
+  'USSF-orlando-city-sc #FFFFFF',
+  'USSF-fc-cincinnati #041E42',
 ]);
+// Clubs reviewed down to a fixed set of rounds: only these colours are ever hidden.
+const ONLY_REGIONS: Record<string, string[]> = {
+  'theFA-liverpool': ['#AD1614'],
+  'RFEF-getafe': ['#155B9F'],
+  'USSF-la-galaxy': ['#15284B'],
+  'USSF-atlanta-united': ['#A32035', '#2D2A26'],
+};
 
 // Source folder names are terse or occasionally wrong; these are the ones a player
 // would have to recognize on sight.
@@ -74,6 +114,8 @@ const NAME_FIX: Record<string, string> = {
   'Frankfurt': 'Eintracht Frankfurt', 'Leipzig': 'RB Leipzig', 'Dortmund': 'Borussia Dortmund',
   'Elversberg': 'SV Elversberg', 'Darmstadt': 'Darmstadt 98', 'Düsseldorf': 'Fortuna Düsseldorf',
   'Bochum': 'VfL Bochum', 'Stuttgart': 'VfB Stuttgart', 'Wolves': 'Wolverhampton Wanderers',
+  'Newcastle': 'Newcastle United',
+  'Inter Miami CF': 'Inter Miami', 'LA FC': 'LAFC', 'New York City': 'New York City FC', 'Orlando City SC': 'Orlando City',
 };
 
 type Picked = { fed: string; folder: string; path: string };
@@ -98,7 +140,7 @@ async function listTree(): Promise<Picked[]> {
   for (const e of tree.tree) {
     const p = e.path.split('/');
     if (!e.path.endsWith('.svg') || p[4] !== 'clubs' || !FEDS.includes(p[3]!)) continue;
-    const key = `${p[3]}/${p[5]}`;
+    if (p[3] === 'USSF' && !USSF_KEEP.has(p[5]!.replace(/^\d+[_-]\s*/, '').trim())) continue;    const key = `${p[3]}/${p[5]}`;
     byClub.set(key, [...(byClub.get(key) ?? []), e.path]);
   }
   const out: Picked[] = [];
@@ -179,6 +221,34 @@ function normalize(raw: string): string {
     (m, _tag, _x, y: string) => (+y > 760 ? '' : m));
   s = s.replace(/viewBox="[^"]*"/, `viewBox="0 0 800 ${ART_BOTTOM}"`);
   return s.trim();
+}
+
+function shrink(normalized: string, floatPrecision: number): string {
+  // convertColors defaults to shortening #FF0000 to the keyword `red`, which the
+  // hex scan below cannot see — the region then vanishes from `hideable` and every
+  // other region's coverage is measured against a short colour list. Force the
+  // traffic the other way: keywords in, hex out.
+  // collapseGroups hoists a group's clip-path onto the wrong element and the clipped
+  // art spills out (Liverpool's crown and ribbon), so it stays off for clipped badges.
+  const clipped = normalized.includes('clip-path');
+  const svgoOpts: Config = {
+    multipass: true, floatPrecision,
+    plugins: [{ name: 'preset-default', params: { overrides: {
+      convertColors: { names2hex: true, shortname: false },
+      ...(clipped && { collapseGroups: false }),
+      // Curves re-fitted as arcs at whole units come out with rounded radii, and the
+      // error carries through the relative path: Real Madrid's rings slid off-centre.
+      // SVGO's types only allow an options object, but the plugin gates on truthiness.
+      ...(floatPrecision === 0 && { convertPathData: { makeArcs: false as unknown as undefined } }),
+    } } }],
+  };
+  let svg = optimize(normalized, svgoOpts).data;
+  svg = optimize(svg, svgoOpts).data;
+  // After optimizing, not before: SVGO's removeUselessStrokeAndFill strips an
+  // explicit black fill right back off, since black is the default it encodes.
+  svg = stampDefaultFills(svg);
+  // SVGO can re-shorten hexes it just saw us expand.
+  return svg.replace(/(fill|stroke)="(#[0-9a-fA-F]{3,6})"/g, (_m, k: string, v: string) => `${k}="${up(v)}"`);
 }
 
 const DRAWABLE = new Set(['path', 'rect', 'circle', 'ellipse', 'polygon', 'polyline']);
@@ -285,30 +355,30 @@ async function main() {
     const code = `${p.fed}-${folder.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
     if (DUD_CLUBS.has(code)) continue;
 
-    const raw = await download(p);
+    const flatten = FLATTEN_CLUBS.has(code);
+    const src = inlineClassStyles(await download(p));
+    const raw = flatten ? flattenGradients(src) : src;
     const name = NAME_FIX[folder] ?? folder;
 
     if (/<image\b/.test(raw)) { skipped.image!.push(name); continue; }
-    if (/url\(#/.test(raw)) { skipped.gradient!.push(name); continue; }
+    // Flattened badges keep their clip paths; any url() left in paint is a gradient.
+    if ((flatten ? /(fill|stroke)(="|:\s*)url\(#/ : /url\(#/).test(raw)) { skipped.gradient!.push(name); continue; }
 
-    let svg = normalize(raw);
-    // convertColors defaults to shortening #FF0000 to the keyword `red`, which the
-    // hex scan below cannot see — the region then vanishes from `hideable` and every
-    // other region's coverage is measured against a short colour list. Force the
-    // traffic the other way: keywords in, hex out.
-    const svgoOpts: Config = {
-      multipass: true, floatPrecision: 1,
-      plugins: [{ name: 'preset-default', params: { overrides: { convertColors: { names2hex: true, shortname: false } } } }],
-    };
-    svg = optimize(svg, svgoOpts).data;
-    svg = optimize(svg, svgoOpts).data;
-    // After optimizing, not before: SVGO's removeUselessStrokeAndFill strips an
-    // explicit black fill right back off, since black is the default it encodes.
-    svg = stampDefaultFills(svg);
-    // SVGO can re-shorten hexes it just saw us expand.
-    svg = svg.replace(/(fill|stroke)="(#[0-9a-fA-F]{3,6})"/g, (_m, k: string, v: string) => `${k}="${up(v)}"`);
+    let base = normalize(raw);
+    if (ROUNDEL_ONLY.has(code)) {
+      // Subpath splitting needs absolute coords; arcs off for the same reason as shrink.
+      const absOpts = { forceAbsolutePath: true, floatPrecision: 3, makeArcs: false as unknown as undefined };
+      base = lockOutsideRoundel(optimize(base, { plugins: [{ name: 'convertPathData', params: absOpts }] }).data);
+      const clip = REGION_CLIPS[code];
+      if (clip) base = clipRegion(base, clip.hex, clip.circle);
+    }
+    let svg = shrink(base, 1);
+    // Whole-unit coords move a point <0.5px at game size on the 800 canvas, but halve
+    // the bytes of dense line art. Fallback only, so badges that already fit stay
+    // byte-identical and keep their vetted rings.
+    if (Buffer.byteLength(svg) > MAX_BYTES && (COARSE_FEDS.has(p.fed) || COARSE_CLUBS.has(code) || flatten)) svg = shrink(base, 0);
 
-    if (Buffer.byteLength(svg) > MAX_BYTES) { skipped.tooBig!.push(`${name}(${(Buffer.byteLength(svg) / 1024).toFixed(0)}KB)`); continue; }
+    if (Buffer.byteLength(svg) > (flatten ? FLATTEN_MAX_BYTES : MAX_BYTES)) { skipped.tooBig!.push(`${name}(${(Buffer.byteLength(svg) / 1024).toFixed(0)}KB)`); continue; }
 
     const hexes = [...new Set([...svg.matchAll(/(?:fill|stroke)="(#[0-9A-F]{6})"/g)].map(m => m[1]!))];
     if (!hexes.length) { skipped.noRegion!.push(name); continue; }
@@ -326,6 +396,7 @@ async function main() {
     const hideable: { hex: string; coverage: number }[] = [];
     for (const hex of cands) {
       if (DUD_REGIONS.has(`${code} ${hex}`)) continue;
+      if (ONLY_REGIONS[code] && !ONLY_REGIONS[code].includes(hex)) continue;
       const ring = await regionOutlineRaster(svg, hex, rasterize, undefined, { minLoopFrac: MIN_LOOP_FRAC });
       // antsPaths emits the same `d` twice (dark base + offset white), so each traced
       // loop contributes two M commands.
