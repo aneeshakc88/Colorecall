@@ -4,8 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx scripts/build-shape-icons.ts && vite --port=3000 --host=0.0.0.0",
-    "build": "tsx scripts/build-shape-icons.ts && vite build && tsx scripts/prerender.ts",
+    "dev": "tsx scripts/build-shape-icons.ts && tsx scripts/build-art.ts && vite --port=3000 --host=0.0.0.0",
+    "build": "tsx scripts/build-shape-icons.ts && tsx scripts/build-art.ts && vite build && tsx scripts/prerender.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit"

@@ -1,9 +1,9 @@
 // Football Logo intro — copy left, the day's first badge (wearing its wrong colour)
 // right, the rest of the day's badges drifting behind as a quiet ribbon. Same
 // split-hero shape as FlagSplitHero, dressed as a pitch instead of an atlas.
-import { useMemo } from 'react';
+import { use, useMemo } from 'react';
 import { Trophy } from 'lucide-react';
-import { getDailyCrestPuzzle } from './crest-core';
+import { loadDailyCrestPuzzle } from './crest-core';
 import { swapRegion, viewBoxRatio } from '../flag/flag-highlight';
 
 type Props = {
@@ -19,11 +19,11 @@ const dailyKicker = () => {
   return `Daily · ${MONTHS[d.getUTCMonth()]} ${d.getUTCDate()}`;
 };
 
-const crestDataUri = (svg: string) => `data:image/svg+xml,${encodeURIComponent(svg)}`;
+export const crestDataUri = (svg: string) => `data:image/svg+xml,${encodeURIComponent(svg)}`;
 
 // Four badges a day is too short a strip to fill the card, so the day's set is
 // repeated before the track is doubled for the seamless -50% loop.
-const Ribbon = ({ crests, reverse, duration, className }: { crests: string[]; reverse?: boolean; duration: number; className?: string }) => {
+export const Ribbon = ({ crests, reverse, duration, className }: { crests: string[]; reverse?: boolean; duration: number; className?: string }) => {
   const strip = [...crests, ...crests, ...crests];
   return (
     <div
@@ -47,7 +47,7 @@ const Ribbon = ({ crests, reverse, duration, className }: { crests: string[]; re
 };
 
 export const CrestSplitHero = ({ onPlay, onLeaderboard, playersToday, playedToday }: Props) => {
-  const rounds = useMemo(() => getDailyCrestPuzzle(), []);
+  const rounds = use(loadDailyCrestPuzzle());
   const heroRound = rounds[0]!;
   const heroUri = useMemo(
     () => crestDataUri(swapRegion(heroRound.crest.svg, heroRound.hiddenHex, heroRound.wrongHex)),
@@ -57,7 +57,7 @@ export const CrestSplitHero = ({ onPlay, onLeaderboard, playersToday, playedToda
   const ribbonUris = useMemo(() => rounds.map(r => crestDataUri(r.crest.svg)), [rounds]);
 
   return (
-    <div className="relative flex flex-col lg:flex-row w-full h-full items-center justify-center gap-[clamp(0.5rem,2vh,1rem)] lg:gap-10 overflow-hidden pt-12 lg:pt-14 pb-[clamp(0.5rem,3vh,1.5rem)] lg:pb-14">
+    <div className="relative flex flex-col lg:flex-row w-full h-full items-center justify-center-safe gap-[clamp(0.5rem,2vh,1rem)] lg:gap-10 overflow-x-hidden overflow-y-auto pt-12 lg:pt-14 pb-[clamp(0.5rem,3vh,1.5rem)] lg:pb-14">
       <style>{`
         @keyframes cs-drift { to { transform: translateX(-50%); } }
         @keyframes cs-shine { to { background-position: 220% center; } }
@@ -74,14 +74,16 @@ export const CrestSplitHero = ({ onPlay, onLeaderboard, playersToday, playedToda
         className="pointer-events-none absolute inset-0"
         style={{ backgroundImage: 'repeating-linear-gradient(90deg, rgba(255,255,255,0.035) 0 46px, transparent 46px 92px)' }}
       />
-      <div className="cs-flood" style={{ top: '-18%', left: '-12%', width: 340, height: 340, background: 'radial-gradient(circle, rgba(34,197,94,0.42), transparent 68%)', ['--fdur' as string]: '15s', ['--fdl' as string]: '0s' }} />
-      <div className="cs-flood" style={{ bottom: '-20%', right: '-14%', width: 380, height: 380, background: 'radial-gradient(circle, rgba(20,184,166,0.34), transparent 68%)', ['--fdur' as string]: '19s', ['--fdl' as string]: '2s' }} />
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div className="cs-flood" style={{ top: '-18%', left: '-12%', width: 340, height: 340, background: 'radial-gradient(circle, rgba(34,197,94,0.42), transparent 68%)', ['--fdur' as string]: '15s', ['--fdl' as string]: '0s' }} />
+        <div className="cs-flood" style={{ bottom: '-20%', right: '-14%', width: 380, height: 380, background: 'radial-gradient(circle, rgba(20,184,166,0.34), transparent 68%)', ['--fdur' as string]: '19s', ['--fdl' as string]: '2s' }} />
+      </div>
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-32" style={{ background: 'linear-gradient(to top, #040806 6%, rgba(4,8,6,0.72) 42%, rgba(4,8,6,0) 100%)' }} />
 
-      <div className="absolute inset-x-0 top-0 h-10">
+      <div className="hidden lg:block absolute inset-x-0 top-0 h-10">
         <Ribbon crests={ribbonUris} duration={46} />
       </div>
-      <div className="absolute inset-x-0 bottom-0 h-10">
+      <div className="hidden lg:block absolute inset-x-0 bottom-0 h-10">
         <Ribbon crests={ribbonUris} reverse duration={58} />
       </div>
 

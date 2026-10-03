@@ -1,0 +1,54 @@
+.fv2-layer { position: absolute; inset: 0; }
+.fv2-layer > svg { display: block; width: 100%; height: 100%; }
+
+/* Their guess shows for a beat, then the true colour sweeps across with a light edge. */
+.fv2-true { clip-path: inset(0 100% 0 0); animation: fv2-curtain 700ms cubic-bezier(.65, 0, .35, 1) 450ms forwards; transition: opacity 120ms; }
+.fv2-edge { position: absolute; top: -6%; bottom: -6%; width: 3px; left: 0; opacity: 0; pointer-events: none;
+  background: #fff; box-shadow: 0 0 18px 6px rgba(255,255,255,.55);
+  animation: fv2-edge 700ms cubic-bezier(.65, 0, .35, 1) 450ms forwards; }
+@keyframes fv2-curtain { to { clip-path: inset(0 0 0 0); } }
+@keyframes fv2-edge { 0% { left: 0; opacity: 1; } 85% { opacity: 1; } 100% { left: 100%; opacity: 0; } }
+
+.fv2-flag { transform-origin: 0% 50%; }
+/* Flutter and burst mount only when the count-up reports done, so they start on the chime. */
+.fv2-flag.is-perfect { animation: fv2-flutter 900ms ease-in-out; }
+@keyframes fv2-flutter {
+  0%, 100% { transform: none; }
+  25% { transform: perspective(600px) rotateY(-8deg) skewY(1.2deg); }
+  55% { transform: perspective(600px) rotateY(5deg) skewY(-0.8deg); }
+  80% { transform: perspective(600px) rotateY(-2deg); }
+}
+
+.fv2-bit { position: absolute; left: 50%; top: 50%; width: 8px; height: 12px; border-radius: 2px; opacity: 0;
+  animation: fv2-burst 1100ms cubic-bezier(.2, .7, .3, 1) forwards; }
+@keyframes fv2-burst {
+  0% { opacity: 1; transform: translate(-50%, -50%) rotate(0); }
+  100% { opacity: 0; transform: translate(calc(-50% + var(--dx)), calc(-50% + var(--dy))) rotate(var(--rot)); }
+}
+
+.fv2-late { opacity: 0; animation: fv2-in 400ms ease-out 1150ms forwards; }
+@keyframes fv2-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .fv2-true { clip-path: none; opacity: 0; animation: fv2-fade 300ms ease 300ms forwards; }
+  .fv2-edge, .fv2-bit { display: none; }
+  .fv2-flag.is-perfect { animation: none; }
+  .fv2-late { animation-delay: 300ms; }
+}
+@keyframes fv2-fade { to { opacity: 1; } }
+
+.fv2-tile { opacity: 0; animation: fv2-in 450ms ease-out forwards; }
+@media (prefers-reduced-motion: reduce) { .fv2-tile { animation-duration: 1ms; } }
+
+.fv2-flash { opacity: 0; animation: fv2-flash 650ms ease-out; }
+@keyframes fv2-flash { 0% { opacity: .55; } 100% { opacity: 0; } }
+
+/* Scale only: the number is already on screen, so an opacity-0 start would blink it out. */
+.fv2-pop { animation: fv2-bump 450ms cubic-bezier(.22, 1, .36, 1); }
+@keyframes fv2-bump { 0%, 100% { transform: none; } 40% { transform: scale(1.14); } }
+@media (prefers-reduced-motion: reduce) { .fv2-flash, .fv2-pop { animation: none; } }
+
+
+@keyframes fi-drift { to { transform: translateX(-50%); } }
+@keyframes fi-heroglint { 0% { transform: translateX(-140%) skewX(-14deg); } 55%, 100% { transform: translateX(340%) skewX(-14deg); } }
+@media (prefers-reduced-motion: reduce) { .fi-heroglint, [style*="fi-drift"] { animation: none !important; } }

@@ -1,12 +1,18 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { use, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowRight, Share2, X } from 'lucide-react';
-import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, serverTimestamp, doc, updateDoc, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { audio } from '../utils/audio';
 import { trackGameEnd } from '../analytics';
-import { Color, hsbToRgb, VerticalSlider, HorizontalSlider, AnimatedScore, getUserId, getUserType, getDeviceType, generateSessionId } from '../utils/colorMath';
-import { getDailyFlagPuzzle, FLAG_MAX_PER_ROUND, type DailyFlagRound } from './flag-core';
+import { Color, VerticalSlider, HorizontalSlider, AnimatedScore, getUserId, getUserType, getDeviceType, generateSessionId } from '../utils/colorMath';
+import { loadDailyFlagPuzzle, FLAG_MAX_PER_ROUND, type DailyFlagRound } from './flag-core';
 import { getCurrentCycle, getNextResetTime, cycleDateLabel } from '../daily-cycle';
+import { deltaE, hexToHsb, colorToHex } from './color-feedback';
+import { FlagReveal } from './FlagReveal';
+import { FlagAtlas } from './FlagAtlas';
+import { FlagBackdrop, FlagProgress, FlagV2Score, REVEAL_SCORE_TIMING } from './flag-v2-parts';
+import { FLAG_V2 } from '../duo-v2/flag';
+import { ACTION, BOX } from '../duo-v2/DuoV2';
 import { swapRegion, regionOutline, regionOutlineRaster, applyOverlay, viewBoxRatio, type Raster } from './flag-highlight';
 
 type Phase = 'playing' | 'result' | 'final';
@@ -20,61 +26,25 @@ type RoundResult = {
 
 
 
-// ── color conversions (hex <-> HSB, so the shared VerticalSlider can drive a hex guess) ──
-
-function hexToHsb(hex: string): Color {
-  const r = parseInt(hex.slice(1, 3), 16) / 255;
-  const g = parseInt(hex.slice(3, 5), 16) / 255;
-  const b = parseInt(hex.slice(5, 7), 16) / 255;
-  const max = Math.max(r, g, b), min = Math.min(r, g, b);
-  const v = max, d = max - min;
-  const s = max === 0 ? 0 : d / max;
-  let h = 0;
-  if (max !== min) {
-    switch (max) {
-      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
-      case g: h = (b - r) / d + 2; break;
-      default: h = (r - g) / d + 4;
-    }
-    h *= 60;
-  }
-  return { h: Math.round(h), s: Math.round(s * 100), b: Math.round(v * 100) };
-}
-
-function colorToHex(c: Color): string {
-  const [r, g, b] = hsbToRgb(c.h, c.s, c.b);
-  const to = (v: number) => v.toString(16).padStart(2, '0').toUpperCase();
-  return `#${to(r)}${to(g)}${to(b)}`;
-}
-
 // ── scoring (Lab ΔE, same formula as the original Reddit game) ──
 
-function hexToLab(hex: string): [number, number, number] {
-  const r = parseInt(hex.slice(1, 3), 16) / 255, g = parseInt(hex.slice(3, 5), 16) / 255, b = parseInt(hex.slice(5, 7), 16) / 255;
-  const lin = (c: number) => c > 0.04045 ? Math.pow((c + 0.055) / 1.055, 2.4) : c / 12.92;
-  const [rl, gl, bl] = [lin(r), lin(g), lin(b)];
-  const x = (rl * 0.4124 + gl * 0.3576 + bl * 0.1805) / 0.95047;
-  const y = (rl * 0.2126 + gl * 0.7152 + bl * 0.0722) / 1.00000;
-  const z = (rl * 0.0193 + gl * 0.1192 + bl * 0.9505) / 1.08883;
-  const f = (t: number) => t > 0.008856 ? Math.cbrt(t) : 7.787 * t + 16 / 116;
-  return [116 * f(y) - 16, 500 * (f(x) - f(y)), 200 * (f(y) - f(z))];
-}
-
 function calcScore(actualHex: string, guessHex: string): number {
-  const [l1, a1, b1] = hexToLab(actualHex), [l2, a2, b2] = hexToLab(guessHex);
-  const de = Math.sqrt((l1 - l2) ** 2 + (a1 - a2) ** 2 + (b1 - b2) ** 2);
+  const de = deltaE(actualHex, guessHex);
   return Math.min(FLAG_MAX_PER_ROUND, Math.max(0, Math.round((1 - Math.min(de, 100) / 100) * FLAG_MAX_PER_ROUND)));
 }
 
 const ROUND_MSGS: Record<string, string[]> = {
-  perfect: ['Flag expert. Scary accurate.', 'Perfect. Vexillologist detected.', 'Dead on. You know that flag cold.', 'Uncanny colour memory.'],
+  perfect: ['Flag expert. Scary accurate.', 'Perfect. Vexillologist detected.', 'Dead on. You know that flag cold.', 'Uncanny color memory.'],
   great: ['Solid flag knowledge.', 'Sharp eye for the shade.', 'You know your flags.', 'Nearly nailed it.'],
   decent: ['Close enough.', 'You had the right idea.', 'Not bad — a fair guess.', 'The flag forgives you.'],
-  bad: ['Colour memory needs work.', 'Bold choice. Wrong, but bold.', 'The flag committee frowns.', 'Were you guessing blind?'],
+  bad: ['Color memory needs work.', 'Bold choice. Wrong, but bold.', 'The flag committee frowns.', 'Were you guessing blind?'],
   terrible: ['Never seen this flag before?', 'Impressively off.', 'That flag is embarrassed.', 'Way off the mark.'],
 };
+// v2 tiers follow the score bands (24 / 18 / 10), so "perfect" copy only shows when the flag celebrates.
 function getRoundMsg(score: number): string {
-  const key = score >= 21 ? 'perfect' : score >= 16 ? 'great' : score >= 11 ? 'decent' : score >= 5 ? 'bad' : 'terrible';
+  const key = FLAG_V2
+    ? (score >= 24 ? 'perfect' : score >= 18 ? 'great' : score >= 10 ? 'decent' : score >= 5 ? 'bad' : 'terrible')
+    : (score >= 21 ? 'perfect' : score >= 16 ? 'great' : score >= 11 ? 'decent' : score >= 5 ? 'bad' : 'terrible');
   const pool = ROUND_MSGS[key]!;
   return pool[Math.floor(Math.random() * pool.length)]!;
 }
@@ -118,7 +88,8 @@ function useRegionOutline(svg: string | undefined, hex: string, idx?: number[]):
   return sync ?? (svg && rastered?.key === svg + hex + key ? rastered.overlay : null);
 }
 
-function FlagImg({ svg, hiddenHex, hiddenIdx, swapHex, height }: { svg: string; hiddenHex: string; hiddenIdx?: number[] | undefined; swapHex: string; height: number }) {
+// Without a height it fills its size container (v2 stage) at the flag's own aspect.
+function FlagImg({ svg, hiddenHex, hiddenIdx, swapHex, height, reserve = 0 }: { svg: string; hiddenHex: string; hiddenIdx?: number[] | undefined; swapHex: string; height?: number; reserve?: number }) {
   const overlay = useRegionOutline(svg, hiddenHex, hiddenIdx);
   let out = swapRegion(svg, hiddenHex, swapHex, hiddenIdx);
   out = applyOverlay(out, overlay);
@@ -127,7 +98,11 @@ function FlagImg({ svg, hiddenHex, hiddenIdx, swapHex, height }: { svg: string; 
   return (
     <div
       className="shrink-0 overflow-hidden rounded-md [&>svg]:block [&>svg]:h-full [&>svg]:w-full"
-      style={{ height, width: Math.round(height * ratio), maxWidth: '100%', boxShadow: '0 0 0 1px rgba(255,255,255,0.25)' }}
+      style={{
+        ...(height ? { height, width: Math.round(height * ratio) } : { width: `min(100cqw, calc((100cqh - ${reserve}rem) * ${ratio.toFixed(3)}), 640px)`, aspectRatio: String(ratio) }),
+        maxWidth: '100%',
+        boxShadow: height ? '0 0 0 1px rgba(255,255,255,0.25)' : '0 0 0 1px rgba(255,255,255,0.25), 0 30px 60px -20px rgba(0,0,0,0.8)',
+      }}
       dangerouslySetInnerHTML={{ __html: out }}
     />
   );
@@ -135,6 +110,11 @@ function FlagImg({ svg, hiddenHex, hiddenIdx, swapHex, height }: { svg: string; 
 
 const CARD_BASE = "w-full h-full fixed inset-0 lg:relative lg:w-[90vw] lg:max-w-[750px] bg-black backdrop-blur-2xl overflow-hidden pointer-events-auto border border-white/10";
 const CARD_PLAY = `${CARD_BASE} lg:h-[65vh] lg:min-h-[450px] lg:max-h-[550px] flex flex-col shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] lg:rounded-[2.5rem]`;
+// v2 sits in the same frame as the Duo redesign (dv2 tokens, container-sized box).
+// Stage (flag) + panel (controls/score), stacked on phones and side by side when wide, like Duo's recreate.
+const CARD_V2 = `dv2 ${BOX} z-40 flex flex-col wide:flex-row bg-black text-white lg:outline lg:-outline-offset-1 lg:outline-white/10`;
+const STAGE = 'relative flex-1 min-h-0 flex flex-col items-center gap-3 px-5 pt-6 pb-3 wide:px-8 wide:pb-6';
+const PANEL = 'relative wide:w-[44cqw] wide:max-w-[360px] shrink-0 flex flex-col gap-3 px-5 pb-5 wide:pb-6 pt-3 wide:pt-6 wide:px-7 bg-black/45 backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] wide:shadow-[inset_1px_0_0_rgba(255,255,255,0.1)]';
 const CARD_FINAL = `${CARD_BASE} lg:h-auto lg:min-h-[450px] flex flex-col items-center justify-center shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] lg:rounded-[2.5rem] py-12 px-6 md:px-12`;
 
 interface FlagGameProps {
@@ -143,11 +123,13 @@ interface FlagGameProps {
   onExit: () => void;
   onReturnHome: () => void;
   playerName: string;
+  savedName: string;
+  onNameSaved: (name: string) => void;
 }
 
-export default function FlagGame({ hasPlayedToday: _hasPlayedToday, onPlayedToday, onExit, onReturnHome, playerName }: FlagGameProps) {
+export default function FlagGame({ hasPlayedToday: _hasPlayedToday, onPlayedToday, onExit, onReturnHome, playerName, savedName, onNameSaved }: FlagGameProps) {
   const [cycle] = useState(() => getCurrentCycle());
-  const [rounds] = useState<DailyFlagRound[]>(() => getDailyFlagPuzzle(getCurrentCycle()));
+  const rounds: DailyFlagRound[] = use(loadDailyFlagPuzzle(cycle));
   const [currentRound, setCurrentRound] = useState(0);
   const [color, setColor] = useState<Color>({ h: 0, s: 0, b: 50 });
   const [phase, setPhase] = useState<Phase>('playing');
@@ -155,14 +137,20 @@ export default function FlagGame({ hasPlayedToday: _hasPlayedToday, onPlayedToda
   const [lastResult, setLastResult] = useState<RoundResult | null>(null);
   const [roundMsg, setRoundMsg] = useState('');
   const [showScoreText, setShowScoreText] = useState(false);
+  const [countDone, setCountDone] = useState(false);
   const [totalScore, setTotalScore] = useState(0);
   const [nextCountdown, setNextCountdown] = useState('');
   const [copied, setCopied] = useState(false);
+  const [nameInput, setNameInput] = useState(savedName);
+  const [isSaving, setIsSaving] = useState(false);
+  const scoreDocId = useRef<string | null>(null);
   const flagBoxRef = useRef<HTMLDivElement>(null);
   const [boxW, setBoxW] = useState(0);
   const [boxH, setBoxH] = useState(0);
 
   const round = rounds[currentRound];
+  // The blurred backdrop is the costliest repaint while dragging; let it trail the slider on slow phones.
+  const backdropColor = useDeferredValue(color);
 
   useEffect(() => {
     const saved = localStorage.getItem('flag_daily_state');
@@ -172,6 +160,7 @@ export default function FlagGame({ hasPlayedToday: _hasPlayedToday, onPlayedToda
         if (parsed.cycleId === cycle && parsed.completed && parsed.results?.length === rounds.length) {
           setRoundResults(parsed.results);
           setTotalScore(parsed.totalScore || 0);
+          scoreDocId.current = parsed.docId ?? null;
           setPhase('final');
           return;
         }
@@ -210,7 +199,7 @@ export default function FlagGame({ hasPlayedToday: _hasPlayedToday, onPlayedToda
     onPlayedToday();
     trackGameEnd(total, 'Flag - Daily');
     try {
-      await addDoc(collection(db, 'flag_daily_scores'), {
+      const ref = await addDoc(collection(db, 'flag_daily_scores'), {
         sessionId: generateSessionId(),
         createdAt: serverTimestamp(),
         period: cycle,
@@ -222,8 +211,30 @@ export default function FlagGame({ hasPlayedToday: _hasPlayedToday, onPlayedToda
         name: playerName,
         isPosted: true,
       });
+      scoreDocId.current = ref.id;
+      localStorage.setItem('flag_daily_state', JSON.stringify({ cycleId: cycle, completed: true, totalScore: total, results, docId: ref.id }));
     } catch (e) {
       console.error('Failed to post flag score', e);
+    }
+  };
+
+  // The score is already posted under the guest name; this renames it, like Duo's Save.
+  const saveName = async () => {
+    const name = nameInput.trim().slice(0, 20);
+    if (!name || isSaving) return;
+    audio.playClick();
+    setIsSaving(true);
+    try {
+      const ids = scoreDocId.current
+        ? [scoreDocId.current]
+        : (await getDocs(query(collection(db, 'flag_daily_scores'), where('userId', '==', getUserId()), where('period', '==', cycle)))).docs.map(d => d.id);
+      await Promise.all(ids.map(id => updateDoc(doc(db, 'flag_daily_scores', id), { name, isPosted: true })));
+      localStorage.setItem('mastery_player_name', name);
+      onNameSaved(name);
+    } catch (e) {
+      console.error('Failed to save flag name', e);
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -232,10 +243,11 @@ export default function FlagGame({ hasPlayedToday: _hasPlayedToday, onPlayedToda
     audio.playClick();
     const guessHex = colorToHex(color);
     const score = calcScore(round.hiddenHex, guessHex);
-    if (score >= 21) audio.playSuccess();
+    if (!FLAG_V2 && score >= 21) audio.playSuccess();
     const result: RoundResult = { flagName: round.flag.name, actualHex: round.hiddenHex, guessHex, score };
     setLastResult(result);
     setShowScoreText(false);
+    setCountDone(false);
     setRoundMsg(getRoundMsg(score));
     setRoundResults(prev => [...prev, result]);
     setPhase('result');
@@ -265,9 +277,11 @@ export default function FlagGame({ hasPlayedToday: _hasPlayedToday, onPlayedToda
     const dateStr = cycleDateLabel(cycle);
     let grid = "";
     roundResults.forEach(r => {
-      if (r.score >= 21) grid += "🟩";
-      else if (r.score >= 16) grid += "🟨";
-      else if (r.score >= 11) grid += "🟧";
+      // v2 uses the Duo bands so a green square means the same thing in every mode.
+      const [g, y, o] = FLAG_V2 ? [24, 18, 10] : [21, 16, 11];
+      if (r.score >= g) grid += "🟩";
+      else if (r.score >= y) grid += "🟨";
+      else if (r.score >= o) grid += "🟧";
       else grid += "🟥";
     });
     const text = `Flag ColorGuessr Daily - ${dateStr}\nScore: ${totalScore}/100\n${grid}\nPlay at: https://www.colorecall.com/`;
@@ -278,6 +292,76 @@ export default function FlagGame({ hasPlayedToday: _hasPlayedToday, onPlayedToda
 
   const flagRatio = round ? viewBoxRatio(round.flag.svg) : 1.5;
   const flagHeight = Math.max(40, Math.min(boxH || 200, boxW ? boxW / flagRatio : 200));
+
+  if (FLAG_V2 && phase === 'playing' && round) {
+    return (
+      <div className={CARD_V2}>
+        <FlagBackdrop svg={swapRegion(round.flag.svg, round.hiddenHex, colorToHex(backdropColor), round.hiddenIdx)} />
+        <div className={STAGE}>
+          <FlagProgress svgs={rounds.map(r => r.flag.svg)} current={currentRound} scores={roundResults.map(r => r.score)} />
+          {/* Prompt and flag centre as one group, so a width-limited flag on a tall phone doesn't drift away from its title. */}
+          <div className="relative flex-1 min-h-0 w-full [container-type:size] grid content-center justify-items-center gap-4">
+            <h2 className="dv2-display text-lg wide:text-2xl font-bold text-center text-balance text-white/60">
+              Fix the wrong color in <span className="text-white">{round.flag.name}</span>
+            </h2>
+            <FlagImg svg={round.flag.svg} hiddenHex={round.hiddenHex} hiddenIdx={round.hiddenIdx} swapHex={colorToHex(color)} reserve={5} />
+          </div>
+        </div>
+
+        <div className={PANEL}>
+          <div className="flex-1 grid gap-3 [@media(max-height:420px)]:gap-1.5 content-end wide:content-center">
+            <HorizontalSlider label="Hue" suffix="°" value={color.h} max={360} type="H"
+              onChange={v => setColor(c => ({ ...c, h: v }))}
+              bg="linear-gradient(to right, #ff0000 0%, #ffff00 16.67%, #00ff00 33.33%, #00ffff 50%, #0000ff 66.67%, #ff00ff 83.33%, #ff0000 100%)" />
+            <HorizontalSlider label="Saturation" value={color.s} max={100} type="S"
+              onChange={v => setColor(c => ({ ...c, s: v }))}
+              bg={`linear-gradient(to right, ${colorToHex({ ...color, s: 0 })}, ${colorToHex({ ...color, s: 100 })})`} />
+            <HorizontalSlider label="Brightness" value={color.b} max={100} type="B"
+              onChange={v => setColor(c => ({ ...c, b: v }))}
+              bg={`linear-gradient(to right, #000, ${colorToHex({ ...color, b: 100 })})`} />
+          </div>
+          <button onClick={handleSubmit} className={`${ACTION} shrink-0 bg-white text-black hover:bg-zinc-200`}>
+            Lock it in
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (FLAG_V2 && phase === 'result' && lastResult && round) {
+    const isLast = currentRound + 1 >= rounds.length;
+    return (
+      <div className={CARD_V2}>
+        <FlagBackdrop svg={round.flag.svg} />
+        <div className={STAGE}>
+          <FlagProgress svgs={rounds.map(r => r.flag.svg)} current={currentRound} scores={roundResults.map(r => r.score)} />
+          <div className="relative flex-1 min-h-0 w-full [container-type:size] grid content-center justify-items-center gap-4">
+            <h2 className="dv2-display text-lg wide:text-2xl font-bold text-center text-white">{lastResult.flagName}</h2>
+            <FlagReveal svg={round.flag.svg} hiddenHex={round.hiddenHex} hiddenIdx={round.hiddenIdx} guessHex={lastResult.guessHex} perfect={lastResult.score >= 24} fire={countDone} reserve={6.5} />
+            <p className="fv2-late text-white/45 text-[13px] font-semibold">Hold the flag to see your guess</p>
+          </div>
+        </div>
+
+        <div className={PANEL}>
+          <FlagV2Score
+            result={lastResult}
+            msg={roundMsg}
+            showMsg={showScoreText}
+            timing={REVEAL_SCORE_TIMING}
+            onScoreDone={() => {
+              // Number, chime/ping, confetti and message all land on the same frame.
+              setCountDone(true);
+              setShowScoreText(true);
+              if (lastResult.score >= 24) audio.playSuccess(); else audio.playScoreReveal();
+            }}
+          />
+          <button onClick={handleContinue} aria-label={isLast ? 'See final score' : 'Next round'} className={`${ACTION} shrink-0 bg-white text-black hover:bg-zinc-200`}>
+            <ArrowRight size={26} aria-hidden />
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (phase === 'playing' && round) {
     return (
@@ -313,7 +397,7 @@ export default function FlagGame({ hasPlayedToday: _hasPlayedToday, onPlayedToda
 
           <div className="flex-1 min-w-0 flex flex-col items-center gap-4 relative px-4 sm:px-8 pt-14 sm:pt-32 pb-32 lg:p-4 lg:justify-center">
             <div className="lg:absolute lg:top-12 lg:left-1/2 lg:-translate-x-1/2 text-white/60 text-xs sm:text-sm tracking-[0.15em] sm:tracking-[0.2em] uppercase font-bold z-20 text-center max-w-[80%]">
-              Fix the wrong colour in the <span className="text-white">{round.flag.name}</span> flag
+              Fix the wrong color in the <span className="text-white">{round.flag.name}</span> flag
             </div>
 
             <div ref={flagBoxRef} className="w-full flex-1 min-h-0 lg:flex-none lg:max-w-md lg:h-44 flex items-center justify-center">
@@ -371,7 +455,7 @@ export default function FlagGame({ hasPlayedToday: _hasPlayedToday, onPlayedToda
 
           <div className="absolute top-6 sm:top-24 lg:top-6 right-6 flex flex-col items-end text-right">
             <div className="flex items-baseline gap-1 mb-1">
-              <h2 className="text-5xl md:text-6xl font-bold tracking-tighter leading-none text-white">
+              <h2 className="font-bold tracking-tighter text-5xl md:text-6xl leading-none text-white">
                 <AnimatedScore value={lastResult.score} onComplete={() => {
                   setTimeout(() => { setShowScoreText(true); audio.playScoreReveal(); }, 150);
                 }} />
@@ -412,6 +496,29 @@ export default function FlagGame({ hasPlayedToday: _hasPlayedToday, onPlayedToda
   }
 
   // phase === 'final'
+  if (FLAG_V2) {
+    return (
+      <div className={CARD_V2}>
+        <FlagAtlas
+          items={roundResults}
+          backdropSvg={rounds[0]!.flag.svg}
+          total={totalScore}
+          quip={totalScore >= 85 ? 'Flag encyclopedia. Remarkable.' : totalScore >= 60 ? 'Solid flag knowledge.' : totalScore >= 40 ? 'Some flags stumped you. Fair.' : 'Back to the atlas.'}
+          dateLabel={cycleDateLabel(cycle)}
+          countdown={nextCountdown}
+          copied={copied}
+          onShare={handleShare}
+          name={nameInput}
+          setName={setNameInput}
+          onSaveName={saveName}
+          isSaving={isSaving}
+          onExit={() => { audio.playClick(); onExit(); }}
+          onReturnHome={() => { audio.playClick(); onReturnHome(); }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className={CARD_FINAL}>
       <button
