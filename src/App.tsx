@@ -10,20 +10,11 @@ import { audio } from './utils/audio';
 import { Color, hsbToRgb, hsbToString, VerticalSlider, HorizontalSlider, AnimatedScore, getUserId, getMyUserIds, getUserType, getDeviceType, generateSessionId } from './utils/colorMath';
 import { getCurrentCycle, getNextResetTime, cycleDateLabel } from './daily-cycle';
 
-// Split Hero is the only flag intro anywhere, dev included. The alternates stay
-// in the tree but are reachable only via ?heroLab=1.
-const HERO_LAB = new URLSearchParams(window.location.search).has('heroLab');
-
-// Lazy so the 586KB club badge dataset stays out of the main bundle. The intro
-// hero renders the day's real badges, so it pulls the same chunk.
+// Lazy so badge and flag code stays out of the main bundle; each mode then fetches only the day's 4 SVGs.
 const CrestGame = React.lazy(() => import('./crest/CrestGame'));
 const CrestSplitHero = React.lazy(() => import('./crest/CrestSplitHero').then(m => ({ default: m.CrestSplitHero })));
-// Same for the flag dataset.
 const FlagGame = React.lazy(() => import('./flag/FlagGame'));
-const FlagIntroRing = React.lazy(() => import('./flag/FlagRing').then(m => ({ default: m.FlagIntroRing })));
 const FlagSplitHero = React.lazy(() => import('./flag/FlagSplitHero').then(m => ({ default: m.FlagSplitHero })));
-const FlagDeckHero = React.lazy(() => import('./flag/FlagDeckHero').then(m => ({ default: m.FlagDeckHero })));
-const FlagDemoHero = React.lazy(() => import('./flag/FlagDemoHero').then(m => ({ default: m.FlagDemoHero })));
 
 // Each shape icon is its own ~0.4KB file (generated from shapes.ts), so a round fetches only the
 // icons it shows instead of all of them. OBJECTS is filled as icons arrive; one component per index
@@ -54,6 +45,12 @@ import { auth } from './firebase';
 import { PAGES, SITE_URL, type Edition } from './seo/pages';
 import HowToPlay from './seo/HowToPlay';
 import { getGuestName, DisplayNameButton, DisplayNameModal } from './components/DisplayName';
+import { DUO_V2, CLASSIC_V2, FLAG_V2, CREST_V2 } from './duo-v2/flag';
+import { DuoV2Start, DuoV2Ready, DuoV2Memorize, DuoV2Recreate, DuoV2Result, DuoV2Final } from './duo-v2/DuoV2';
+import { ClassicV2Start, ClassicV2Memorize, ClassicV2Pick } from './classic-v2/ClassicV2';
+// Eager: the start screens' copy and buttons paint with the page; only their flag/badge art streams in later.
+import { FlagV2Start } from './flag/FlagV2Start';
+import { CrestV2Start } from './crest/CrestV2Start';
 
 enum OperationType {
   CREATE = 'create',
@@ -265,6 +262,15 @@ const prefetchRound = (r: number, mode: GameMode, cycle: number) => {
 };
 // What this page's start buttons open: round 1 of each mode, or today's saved results if already played.
 const prefetchStartScreen = (edition: Edition, cycle: number) => {
+  // Flag/badge screens: their art chunk and showcase SVGs download alongside the app code instead of after the first render.
+  if (edition === 'flag' && FLAG_V2) {
+    import('./flag/FlagV2Art').then(() => import('./flag/flag-core')).then(m => { m.loadShowcaseFlags(); m.loadDailyFlagPuzzle(cycle); }).catch(() => {});
+    return;
+  }
+  if (edition === 'crest' && CREST_V2) {
+    import('./crest/CrestV2Art').then(() => import('./crest/crest-core')).then(m => { m.loadShowcaseCrests(cycle); m.loadDailyCrestPuzzle(cycle); }).catch(() => {});
+    return;
+  }
   const modes: [string, GameMode, GameMode] | null =
     edition === 'duo' ? ['duo_daily_chroma_state', 'duo', 'duo-quickplay'] :
     edition === 'classic' ? ['daily_chroma_state', 'daily', 'solo'] : null;
@@ -521,7 +527,6 @@ export default function App() {
   const [flagLeaderboard, setFlagLeaderboard] = useState<{ id: string; userId: string; name: string; score: number }[]>([]);
   const [flagTotalPlayers, setFlagTotalPlayers] = useState(0);
   const [flagStats, setFlagStats] = useState<MyStats | null>(null);
-  const [flagIntroLayout, setFlagIntroLayout] = useState<'current' | 'split' | 'deck' | 'demo'>('split');
   const [copied, setCopied] = useState(false);
   const [showScoreboard, setShowScoreboard] = useState(false);
   const [leaderboardScope, setLeaderboardScope] = useState<'daily' | 'quickplay'>('daily');
@@ -987,6 +992,22 @@ export default function App() {
     setGameState('ready');
   };
 
+  // Once the page is idle, fetch today's 4 flags and 4 badges (a few KB) so those modes open instantly.
+  useEffect(() => {
+    if ((navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData) return;
+    const warm = () => {
+      // The showcase modules seed the intro art first, so loadShowcase* finds it bundled rather than fetching it again.
+      import('./flag/flag-showcase').then(() => import('./flag/flag-core')).then(m => Promise.all([m.loadDailyFlagPuzzle(), m.loadShowcaseFlags()])).catch(() => {});
+      import('./crest/crest-showcase').then(() => import('./crest/crest-core')).then(m => Promise.all([m.loadDailyCrestPuzzle(), m.loadShowcaseCrests()])).catch(() => {});
+    };
+    if ('requestIdleCallback' in window) {
+      const id = requestIdleCallback(warm, { timeout: 4000 });
+      return () => cancelIdleCallback(id);
+    }
+    const t = setTimeout(warm, 2500);
+    return () => clearTimeout(t);
+  }, []);
+
   // Covers client-side navigation between editions and the admin day offset.
   useEffect(() => prefetchStartScreen(gameEdition, getEffectiveCycle()), [gameEdition, cycleOffset]);
 
@@ -1118,10 +1139,13 @@ export default function App() {
     trackButtonClick('Submit');
     const roundScore = calculateScore(targetColor, userColor, targetObject, userObject, gameMode);
 
-    if (roundScore > 85) {
-      audio.playSuccess();
-    } else {
-      audio.playClick();
+    // v2 result screens play their own payoff when the count lands; this click would double the submit click.
+    if (!anyV2) {
+      if (roundScore > 85) {
+        audio.playSuccess();
+      } else {
+        audio.playClick();
+      }
     }
 
     setScore(roundScore);
@@ -1231,11 +1255,85 @@ export default function App() {
   const TargetIcon = targetObject;
   const UserIcon = userObject;
 
+  // Duo redesign (opt-in, see duo-v2/flag.ts). Same state and handlers, different screens.
+  const v2 = DUO_V2 && gameMode.startsWith('duo');
+  const v2Home = DUO_V2 && gameEdition === 'duo' && !showScoreboard;
+  // Classic redesign, same deal: ?classic=v2. Flow is unchanged (memorize, pick the shape, recreate).
+  const cv2 = CLASSIC_V2 && (gameMode === 'daily' || gameMode === 'solo');
+  const cv2Home = CLASSIC_V2 && gameEdition === 'classic' && !showScoreboard;
+  const anyV2 = v2 || cv2;
+  // Flag v2's card is full-screen below lg, so the header and footer step aside like Duo v2's.
+  const flagV2Game = (FLAG_V2 && showFlagGame) || (CREST_V2 && showCrestGame);
+  // v2 start cards carry the footer inside them on phones, so a card that scrolls never slides its buttons under it.
+  const v2Start = !showScoreboard && (gameEdition === 'duo' ? DUO_V2 : gameEdition === 'classic' ? CLASSIC_V2 : gameEdition === 'flag' ? FLAG_V2 : CREST_V2);
+  const footerLinks = (
+    <>
+      <DisplayNameButton name={displayName} onClick={() => { audio.playClick(); setShowNameModal(true); }} className="sm:hidden font-bold text-zinc-500" />
+      <Link to="/terms" className="hover:text-zinc-900 transition-colors">Terms<span className="max-[374px]:hidden"> of Service</span></Link>
+      <Link to="/privacy" className="hover:text-zinc-900 transition-colors">Privacy<span className="max-[374px]:hidden"> Policy</span></Link>
+      <button
+        onClick={toggleSound}
+        className="hover:text-zinc-900 transition-colors flex items-center cursor-pointer ml-1"
+        aria-label={soundEnabled ? "Mute" : "Unmute"}
+      >
+         {soundEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
+      </button>
+      <button
+        onClick={() => { audio.playClick(); setShowHowToPlay(true); }}
+        className="hover:text-zinc-900 transition-colors flex items-center cursor-pointer"
+        aria-label="How to play"
+        aria-controls="how-to-play"
+      >
+        <CircleHelp size={14} />
+      </button>
+    </>
+  );
+  const startClassicDaily = () => {
+    audio.playClick();
+    trackButtonClick('Daily');
+    if (hasPlayedToday) {
+      const savedState = localStorage.getItem('daily_chroma_state');
+      if (savedState) {
+        const parsed = JSON.parse(savedState);
+        setTotalScore(parsed.totalScore);
+        setRoundData(parsed.roundData || []);
+        setRound(parsed.roundData ? parsed.roundData.length : 4);
+        setGameMode('daily');
+        loadIcons(savedRoundIcons(parsed)).then(() => setGameState('final'));
+      }
+    } else {
+      trackGameStart('Classic - Daily');
+      setTotalScore(0);
+      setRoundData([]);
+      startRound(1, 'daily');
+    }
+  };
+  const startDuoDaily = () => {
+    audio.playClick();
+    trackButtonClick('Duo');
+    if (hasPlayedDuoToday) {
+      const savedState = localStorage.getItem('duo_daily_chroma_state');
+      if (savedState) {
+        const parsed = JSON.parse(savedState);
+        setTotalScore(parsed.totalScore);
+        setRoundData(parsed.roundData || []);
+        setRound(parsed.roundData ? parsed.roundData.length : 4);
+        setGameMode('duo');
+        loadIcons(savedRoundIcons(parsed)).then(() => setGameState('final'));
+      }
+    } else {
+      setTotalScore(0);
+      setRoundData([]);
+      startRound(1, 'duo');
+      trackGameStart('Duo - Daily');
+    }
+  };
+
   return (
     <div className="min-h-[100dvh] w-full flex flex-col bg-white text-zinc-900 font-sans overflow-y-auto overflow-x-hidden relative selection:bg-black selection:text-white select-none">
 
       {/* Top Left Mode Tabs — hidden on mobile once a round starts (overlaps game UI); always shown from sm breakpoint up */}
-      <div className={`fixed top-4 left-4 sm:top-6 sm:left-6 z-50 items-center gap-0.5 sm:gap-1 pointer-events-auto bg-white/95 backdrop-blur-md border border-zinc-200 rounded-full pl-1 pr-1.5 py-1.5 sm:pl-1.5 sm:pr-2 sm:py-2 shadow-xl ${(gameState === 'start' && !showScoreboard && !showFlagGame && !showCrestGame) ? 'flex' : 'hidden sm:flex'}`}>
+      <div className={`fixed top-4 left-4 sm:top-6 sm:left-6 z-50 items-center gap-0.5 sm:gap-1 pointer-events-auto bg-white/95 backdrop-blur-md border border-zinc-200 rounded-full pl-1 pr-1.5 py-1.5 sm:pl-1.5 sm:pr-2 sm:py-2 shadow-xl ${(gameState === 'start' && !showScoreboard && !showFlagGame && !showCrestGame) ? 'flex' : (anyV2 || flagV2Game) ? 'hidden lg:flex' : 'hidden sm:flex'}`}>
           {([
             { key: 'duo' as const, label: 'Duo', played: hasPlayedDuoToday },
             { key: 'classic' as const, label: 'Classic', played: hasPlayedToday },
@@ -1253,7 +1351,7 @@ export default function App() {
                   // Switching mid-round abandons it — no score is saved.
                   setGameEdition(key);
                 }}
-                className={`relative px-2.5 py-1.5 sm:px-3.5 sm:py-1.5 rounded-full text-[11px] sm:text-xs font-bold uppercase tracking-widest transition-all ${active ? 'bg-black text-white' : 'text-zinc-400 hover:text-zinc-700'}`}
+                className={`relative whitespace-nowrap px-2.5 max-[374px]:px-2 py-1.5 sm:px-3.5 sm:py-1.5 rounded-full text-[11px] max-[374px]:text-[10px] sm:text-xs font-bold uppercase tracking-widest max-[374px]:tracking-wider transition-all ${active ? 'bg-black text-white' : 'text-zinc-400 hover:text-zinc-700'}`}
               >
                 {label}
                 {played && (
@@ -1264,28 +1362,8 @@ export default function App() {
           })}
       </div>
 
-      {/* Flag intro layout switcher — staging/dev only, see HERO_LAB */}
-      {HERO_LAB && gameEdition === 'flag' && !showFlagGame && gameState === 'start' && !showScoreboard && (
-        <div className="fixed top-4 right-4 sm:top-6 sm:right-6 z-50 flex items-center gap-0.5 pointer-events-auto bg-white/95 backdrop-blur-md border border-zinc-200 rounded-full p-1 shadow-xl">
-          {([
-            { key: 'current' as const, label: 'Current' },
-            { key: 'split' as const, label: 'Split Hero' },
-            { key: 'deck' as const, label: 'Deck Hero' },
-            { key: 'demo' as const, label: 'Live Demo' },
-          ]).map(({ key, label }) => (
-            <button
-              key={key}
-              onClick={() => { audio.playClick(); setFlagIntroLayout(key); }}
-              className={`px-2 py-1.5 sm:px-3 rounded-full text-[9px] sm:text-[10px] font-bold uppercase tracking-widest transition-colors ${flagIntroLayout === key ? 'bg-black text-white' : 'text-zinc-400 hover:text-zinc-700'}`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      )}
-
       {/* Display name — top-right from sm up; below sm the mode tabs fill the top row, so it lives in the footer */}
-      {gameState === 'start' && !showScoreboard && !showFlagGame && !showCrestGame && !(HERO_LAB && gameEdition === 'flag') && (
+      {gameState === 'start' && !showScoreboard && !showFlagGame && !showCrestGame && (
         <div className="fixed top-6 right-6 z-50 hidden sm:flex items-center pointer-events-auto bg-white/95 backdrop-blur-md border border-zinc-200 rounded-full px-4 py-2.5 shadow-xl text-xs font-bold text-zinc-500">
           <DisplayNameButton name={displayName} onClick={() => { audio.playClick(); setShowNameModal(true); }} />
         </div>
@@ -1293,25 +1371,8 @@ export default function App() {
       <DisplayNameModal open={showNameModal} name={displayName} suggested={guestName} onClose={closeNameModal} onSave={renameMyScores} />
 
       {/* Footer Links */}
-      <div className={`fixed bottom-3 left-0 w-full justify-center lg:bottom-6 lg:left-6 lg:w-auto lg:justify-start z-50 ${(gameState === 'start' && !showScoreboard) ? 'flex' : 'hidden lg:flex'} items-center gap-4 text-[10px] sm:text-xs font-medium text-zinc-400`}>
-        <DisplayNameButton name={displayName} onClick={() => { audio.playClick(); setShowNameModal(true); }} className="sm:hidden font-bold text-zinc-500" />
-        <Link to="/terms" className="hover:text-zinc-900 transition-colors">Terms of Service</Link>
-        <Link to="/privacy" className="hover:text-zinc-900 transition-colors">Privacy Policy</Link>
-        <button 
-          onClick={toggleSound} 
-          className="hover:text-zinc-900 transition-colors flex items-center cursor-pointer ml-1" 
-          aria-label={soundEnabled ? "Mute" : "Unmute"}
-        >
-           {soundEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
-        </button>
-        <button
-          onClick={() => { audio.playClick(); setShowHowToPlay(true); }}
-          className="hover:text-zinc-900 transition-colors flex items-center cursor-pointer"
-          aria-label="How to play"
-          aria-controls="how-to-play"
-        >
-          <CircleHelp size={14} />
-        </button>
+      <div className={`fixed bottom-3 left-0 w-full justify-center lg:bottom-6 lg:left-6 lg:w-auto lg:justify-start z-50 ${(gameState === 'start' && !showScoreboard && !flagV2Game) ? (v2Start ? 'hidden sm:flex' : 'flex') : 'hidden lg:flex'} items-center gap-4 max-[374px]:gap-3 whitespace-nowrap text-[10px] sm:text-xs font-medium text-zinc-400`}>
+        {footerLinks}
       </div>
       <HowToPlay edition={gameEdition} open={showHowToPlay} onClose={closeHowToPlay} />
 
@@ -1344,6 +1405,12 @@ export default function App() {
                     <FlagGame
                       hasPlayedToday={hasPlayedFlagToday}
                       playerName={displayName}
+                      savedName={playerName}
+                      onNameSaved={(name) => {
+                        setPlayerName(name);
+                        setShowFlagGame(false);
+                        setShowScoreboard(true);
+                      }}
                       onPlayedToday={() => setHasPlayedFlagToday(true)}
                       onExit={() => setShowFlagGame(false)}
                       onReturnHome={() => {
@@ -1356,7 +1423,26 @@ export default function App() {
                     </React.Suspense>
                   ) : (
                   <AnimatePresence mode="wait">
-                    {gameEdition === 'duo' ? (
+                    {gameEdition === 'duo' && v2Home ? (
+                      <DuoV2Start
+                        key="duo-v2-start"
+                        footer={footerLinks}
+                        hasPlayedToday={hasPlayedDuoToday}
+                        onDaily={startDuoDaily}
+                        onQuickPlay={() => {
+                          audio.playClick();
+                          setTotalScore(0);
+                          setRoundData([]);
+                          startRound(1, 'duo-quickplay');
+                          trackGameStart('Duo - QuickPlay');
+                        }}
+                        onScore={() => {
+                          audio.playClick();
+                          trackButtonClick('Score');
+                          setShowScoreboard(true);
+                        }}
+                      />
+                    ) : gameEdition === 'duo' ? (
                       <motion.div
                         key="duo-screen"
                         initial={{ clipPath: 'circle(0% at 50% 100%)', scale: 0.8, y: 50 }}
@@ -1494,6 +1580,26 @@ export default function App() {
                           </div>
                         )}
                       </motion.div>
+                    ) : gameEdition === 'classic' && cv2Home ? (
+                      <ClassicV2Start
+                        key="classic-v2-start"
+                        footer={footerLinks}
+                        hasPlayedToday={hasPlayedToday}
+                        onDaily={startClassicDaily}
+                        onQuickPlay={() => {
+                          audio.playClick();
+                          trackButtonClick('QuickPlay');
+                          setTotalScore(0);
+                          setRoundData([]);
+                          startRound(1, 'solo');
+                          trackGameStart('Classic - QuickPlay');
+                        }}
+                        onScore={() => {
+                          audio.playClick();
+                          trackButtonClick('Score');
+                          setShowScoreboard(true);
+                        }}
+                      />
                     ) : gameEdition === 'classic' ? (
                       <motion.div
                         key="classic-screen"
@@ -1628,6 +1734,20 @@ export default function App() {
                           </div>
                         )}
                       </motion.div>
+                    ) : gameEdition === 'crest' && CREST_V2 && !showScoreboard ? (
+                      <CrestV2Start
+                        key="crest-v2-start"
+                        footer={footerLinks}
+                        playersToday={colorSportTotalPlayers}
+                        playedToday={hasPlayedColorSportToday}
+                        onLeaderboard={() => { audio.playClick(); trackButtonClick('Score'); setShowScoreboard(true); }}
+                        onPlay={() => {
+                          audio.playClick();
+                          trackButtonClick('ColorSportDaily');
+                          if (!hasPlayedColorSportToday) trackGameStart('Color-sport - Daily');
+                          setShowCrestGame(true);
+                        }}
+                      />
                     ) : gameEdition === 'crest' ? (
                       <motion.div
                         key="crest-screen"
@@ -1765,6 +1885,20 @@ export default function App() {
                           </div>
                         )}
                       </motion.div>
+                    ) : FLAG_V2 && !showScoreboard ? (
+                      <FlagV2Start
+                        key="flag-v2-start"
+                        footer={footerLinks}
+                        playersToday={flagTotalPlayers}
+                        playedToday={hasPlayedFlagToday}
+                        onLeaderboard={() => { audio.playClick(); trackButtonClick('Score'); setShowScoreboard(true); }}
+                        onPlay={() => {
+                          audio.playClick();
+                          trackButtonClick('FlagDaily');
+                          if (!hasPlayedFlagToday) trackGameStart('Flag - Daily');
+                          setShowFlagGame(true);
+                        }}
+                      />
                     ) : (
                       <motion.div
                         key="flag-screen"
@@ -1806,7 +1940,7 @@ export default function App() {
                               onClick={() => { audio.playClick(); trackButtonClick('Score'); setShowScoreboard(true); }}
                               onMouseEnter={() => audio.playHover()}
                               aria-label="Leaderboard"
-                              className={`absolute top-4 right-4 lg:top-6 lg:right-6 z-20 w-11 h-11 rounded-full border border-white/15 bg-white/[0.06] text-white ${flagIntroLayout === 'split' ? 'hidden lg:flex' : 'flex'} items-center justify-center hover:bg-white/[0.12] active:scale-95 transition-all`}
+                              className={`absolute top-4 right-4 lg:top-6 lg:right-6 z-20 w-11 h-11 rounded-full border border-white/15 bg-white/[0.06] text-white hidden lg:flex items-center justify-center hover:bg-white/[0.12] active:scale-95 transition-all`}
                             >
                               <Trophy size={20} />
                             </button>
@@ -1911,84 +2045,17 @@ export default function App() {
                           <div className="flex flex-col lg:flex-row h-full items-center justify-start lg:justify-center w-full max-w-2xl gap-4 lg:gap-6 relative z-10 pt-10 sm:pt-0">
 
                             <React.Suspense fallback={<div className="text-white/40 text-[10px] tracking-[0.2em] uppercase font-bold">Loading flags…</div>}>
-                            {flagIntroLayout === 'current' ? (
-                              <>
-                                {/* display:contents on mobile so the ring can sit between the copy and the CTA */}
-                                <div className="contents lg:flex lg:flex-col lg:flex-1 lg:min-w-0 lg:items-start lg:justify-center lg:gap-7">
-                                  <motion.div
-                                    initial={{ opacity: 0, y: 20 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    transition={{ delay: 0.2, duration: 0.8 }}
-                                    className="order-1 w-full text-center lg:text-left shrink-0"
-                                  >
-                                    <h1 className="fi-title text-4xl sm:text-5xl font-black tracking-tighter leading-none">
-                                      Flag ColorGuessr
-                                    </h1>
-                                    <p className="mt-3 text-sm sm:text-base font-semibold text-[#9fb0c4]">
-                                      One color is wrong — spot it &amp; fix it
-                                    </p>
-                                  </motion.div>
-
-                                  <motion.div
-                                    initial={{ opacity: 0, y: 20 }}
-                                    animate={{ opacity: 1, y: 0 }}
-                                    transition={{ delay: 0.4, duration: 0.8 }}
-                                    className="fi-cta order-3 shrink-0 w-48 relative z-10 p-[5px] rounded-[1.2rem] overflow-hidden hover:scale-[1.03] active:scale-95 transition-all duration-300 group/rainbow"
-                                  >
-                                    <div className="absolute inset-[-500%] bg-[conic-gradient(from_0deg,#ff4545,#f2f245,#45f245,#45f2f2,#4545f2,#f245f2,#ff4545)] animate-spin-slow opacity-40 group-hover/rainbow:opacity-100 transition-opacity" />
-                                    <button
-                                      onClick={() => {
-                                        audio.playClick();
-                                        trackButtonClick('FlagDaily');
-                                        if (!hasPlayedFlagToday) trackGameStart('Flag - Daily');
-                                        setShowFlagGame(true);
-                                      }}
-                                      onMouseEnter={() => audio.playHover()}
-                                      className="relative z-10 w-full py-4 bg-white text-black font-black rounded-2xl flex items-center justify-center text-lg sm:text-xl transition-colors duration-300 overflow-hidden"
-                                    >
-                                      Daily
-                                      <span className="fi-sheen pointer-events-none absolute inset-y-0 -left-1/3 w-1/3 bg-gradient-to-r from-transparent via-white/70 to-transparent mix-blend-overlay" />
-                                    </button>
-                                  </motion.div>
-                                </div>
-
-                                <div className="order-2 shrink-0">
-                                  <FlagIntroRing />
-                                </div>
-                              </>
-                            ) : flagIntroLayout === 'split' ? (
-                              <FlagSplitHero
-                                playersToday={flagTotalPlayers}
-                                playedToday={hasPlayedFlagToday}
-                                onLeaderboard={() => { audio.playClick(); trackButtonClick('Score'); setShowScoreboard(true); }}
-                                onPlay={() => {
-                                  audio.playClick();
-                                  trackButtonClick('FlagDaily');
-                                  if (!hasPlayedFlagToday) trackGameStart('Flag - Daily');
-                                  setShowFlagGame(true);
-                                }}
-                              />
-                            ) : flagIntroLayout === 'deck' ? (
-                              <FlagDeckHero
-                                playersToday={flagTotalPlayers}
-                                onPlay={() => {
-                                  audio.playClick();
-                                  trackButtonClick('FlagDaily');
-                                  if (!hasPlayedFlagToday) trackGameStart('Flag - Daily');
-                                  setShowFlagGame(true);
-                                }}
-                              />
-                            ) : (
-                              <FlagDemoHero
-                                playersToday={flagTotalPlayers}
-                                onPlay={() => {
-                                  audio.playClick();
-                                  trackButtonClick('FlagDaily');
-                                  if (!hasPlayedFlagToday) trackGameStart('Flag - Daily');
-                                  setShowFlagGame(true);
-                                }}
-                              />
-                            )}
+                            <FlagSplitHero
+                              playersToday={flagTotalPlayers}
+                              playedToday={hasPlayedFlagToday}
+                              onLeaderboard={() => { audio.playClick(); trackButtonClick('Score'); setShowScoreboard(true); }}
+                              onPlay={() => {
+                                audio.playClick();
+                                trackButtonClick('FlagDaily');
+                                if (!hasPlayedFlagToday) trackGameStart('Flag - Daily');
+                                setShowFlagGame(true);
+                              }}
+                            />
                             </React.Suspense>
                           </div>
                         )}
@@ -2085,7 +2152,26 @@ export default function App() {
                   )}
                 </div>
               )}
-              {gameState === 'memorize' && (
+              {gameState === 'memorize' && v2 && (
+                <DuoV2Memorize
+                  key="duo-v2-memorize"
+                  round={round}
+                  countdown={countdown}
+                  left={duoTargetPosition === 0 ? { Icon: targetObject, color: targetColor } : { Icon: distractorObject, color: distractorColor }}
+                  right={duoTargetPosition === 1 ? { Icon: targetObject, color: targetColor } : { Icon: distractorObject, color: distractorColor }}
+                />
+              )}
+              {gameState === 'memorize' && cv2 && (
+                <ClassicV2Memorize
+                  key="classic-v2-memorize"
+                  round={round}
+                  countdown={countdown}
+                  progress={memoProgress}
+                  Icon={targetObject}
+                  color={targetColor}
+                />
+              )}
+              {gameState === 'memorize' && !anyV2 && (
                 <motion.div
                   key="target-icon"
                   initial={{ opacity: 0, scale: 0.9, y: 30 }}
@@ -2171,7 +2257,15 @@ export default function App() {
                   )}
                 </motion.div>
               )}
-              {gameState === 'pick' && (
+              {gameState === 'pick' && cv2 && (
+                <ClassicV2Pick
+                  key="classic-v2-pick"
+                  round={round}
+                  options={currentOptions.map(i => OBJECTS[i])}
+                  onPick={Shape => { setUserObject(() => Shape); setGameState('recreate'); }}
+                />
+              )}
+              {gameState === 'pick' && !cv2 && (
                 <motion.div
                   key="pick"
                   initial={{ opacity: 0 }}
@@ -2207,7 +2301,19 @@ export default function App() {
                   </div>
                 </motion.div>
               )}
-              {gameState === 'recreate' && !gameMode.startsWith('duo') && (
+              {gameState === 'recreate' && cv2 && (
+                <DuoV2Recreate
+                  key="classic-v2-recreate"
+                  round={round}
+                  Icon={userObject}
+                  color={userColor}
+                  setColor={setUserColor}
+                  prompt="Now recreate its color."
+                  onChangeShape={() => { audio.playClick(); setGameState('pick'); }}
+                  onSubmit={() => { trackButtonClick('Lock it in'); handleSubmit(); }}
+                />
+              )}
+              {gameState === 'recreate' && !gameMode.startsWith('duo') && !cv2 && (
                 <motion.div
                   key="mix"
                   initial={{ opacity: 0 }}
@@ -2278,7 +2384,17 @@ export default function App() {
                   </button>
                 </motion.div>
               )}
-              {gameState === 'recreate' && gameMode.startsWith('duo') && (
+              {gameState === 'recreate' && v2 && (
+                <DuoV2Recreate
+                  key="duo-v2-recreate"
+                  round={round}
+                  Icon={userObject}
+                  color={userColor}
+                  setColor={setUserColor}
+                  onSubmit={() => { trackButtonClick('Continue'); handleSubmit(); }}
+                />
+              )}
+              {gameState === 'recreate' && gameMode.startsWith('duo') && !v2 && (
                 <motion.div
                   key="user-icon"
                   initial={{ opacity: 0 }}
@@ -2363,7 +2479,9 @@ export default function App() {
           <AnimatePresence mode="wait">
 
             {/* STATE: READY */}
-            {gameState === 'ready' && (
+            {gameState === 'ready' && v2 && <DuoV2Ready key="duo-v2-ready" countdown={countdown} round={round} />}
+            {gameState === 'ready' && cv2 && <DuoV2Ready key="classic-v2-ready" countdown={countdown} round={round} hint="One shape is coming. Remember its shape and color." />}
+            {gameState === 'ready' && !anyV2 && (
               <motion.div
                 key="ready"
                 initial={{ opacity: 0, scale: 0.8, y: 20 }}
@@ -2388,7 +2506,25 @@ export default function App() {
             )}
 
             {/* STATE: RESULT (Classic, bands) */}
-            {gameState === 'result' && BAND_RESULT && (() => {
+            {gameState === 'result' && anyV2 && (
+              <DuoV2Result
+                key={cv2 ? 'classic-v2-result' : 'duo-v2-result'}
+                round={round}
+                score={score}
+                showScoreText={showScoreText}
+                scoreText={getScoreText(score)}
+                onScoreDone={() => {
+                  // Chime pairs with the sparks (score >= 20); message lands on the same frame.
+                  setShowScoreText(true);
+                  if (score >= 20) audio.playSuccess(); else audio.playScoreReveal();
+                }}
+                target={{ Icon: targetObject, color: targetColor }}
+                user={{ Icon: userObject, color: userColor }}
+                wrongShape={targetObject !== userObject}
+                onNext={handleNextRound}
+              />
+            )}
+            {gameState === 'result' && BAND_RESULT && !anyV2 && (() => {
               const tInk = inkOn(targetColor), uInk = inkOn(userColor);
               const wrongShape = targetObject !== userObject;
               return (
@@ -2523,7 +2659,91 @@ export default function App() {
             )}
 
             {/* STATE: FINAL */}
-            {gameState === 'final' && (
+            {gameState === 'final' && v2 && (
+              <DuoV2Final
+                key="duo-v2-final"
+                isDaily={gameMode === 'duo'}
+                totalScore={totalScore}
+                quote={totalScore >= 90 ? 'A master of the spectrum.' :
+                  totalScore >= 70 ? 'A highly refined eye.' :
+                    totalScore >= 40 ? 'An emerging perspective.' : 'Vision requires practice.'}
+                rounds={roundData.map(d => ({
+                  target: { Icon: OBJECTS[d.targetObjectIndex], color: d.targetColor },
+                  user: { Icon: OBJECTS[d.userObjectIndex], color: d.userColor },
+                  score: d.score,
+                }))}
+                stats={gameMode === 'duo' ? duoStats : null}
+                nextIn={gameMode === 'duo' ? nextDailyCountdown : null}
+                playerName={playerName}
+                setPlayerName={setPlayerName}
+                onPost={postScore}
+                isPosting={isPosting}
+                onShare={handleShare}
+                copied={copied}
+                onPlayAgain={gameMode === 'duo-quickplay' ? () => {
+                  audio.playClick();
+                  trackButtonClick('PlayAgain');
+                  setTotalScore(0);
+                  setRoundData([]);
+                  startRound(1, gameMode);
+                  trackGameStart(getAnalyticsModeName(gameMode));
+                } : null}
+                label={gameMode === 'duo' ? "Today's Duo" : 'Quick play'}
+                crossSell={{
+                  text: 'Try Classic: four shapes, one at a time',
+                  onClick: () => {
+                    audio.playTransition('splash');
+                    setSplashTrigger(prev => prev + 1);
+                    setGameEdition('classic');
+                    setGameState('start');
+                  },
+                }}
+                onClose={() => { audio.playClick(); setGameState('start'); }}
+              />
+            )}
+            {gameState === 'final' && cv2 && (
+              <DuoV2Final
+                key="classic-v2-final"
+                isDaily={gameMode === 'daily'}
+                label={gameMode === 'daily' ? "Today's Classic" : 'Quick play'}
+                totalScore={totalScore}
+                quote={totalScore >= 90 ? 'A master of the spectrum.' :
+                  totalScore >= 70 ? 'A highly refined eye.' :
+                    totalScore >= 40 ? 'An emerging perspective.' : 'Vision requires practice.'}
+                rounds={roundData.map(d => ({
+                  target: { Icon: OBJECTS[d.targetObjectIndex], color: d.targetColor },
+                  user: { Icon: OBJECTS[d.userObjectIndex], color: d.userColor },
+                  score: d.score,
+                }))}
+                stats={gameMode === 'daily' ? dailyStats : null}
+                nextIn={gameMode === 'daily' ? nextDailyCountdown : null}
+                playerName={playerName}
+                setPlayerName={setPlayerName}
+                onPost={postScore}
+                isPosting={isPosting}
+                onShare={handleShare}
+                copied={copied}
+                onPlayAgain={gameMode === 'solo' ? () => {
+                  audio.playClick();
+                  trackButtonClick('PlayAgain');
+                  setTotalScore(0);
+                  setRoundData([]);
+                  startRound(1, gameMode);
+                  trackGameStart(getAnalyticsModeName(gameMode));
+                } : null}
+                crossSell={{
+                  text: 'Try Duo: two shapes, one comes back',
+                  onClick: () => {
+                    audio.playTransition('splash');
+                    setSplashTrigger(prev => prev + 1);
+                    setGameEdition('duo');
+                    setGameState('start');
+                  },
+                }}
+                onClose={() => { audio.playClick(); setGameState('start'); }}
+              />
+            )}
+            {gameState === 'final' && !anyV2 && (
               <motion.div
                 key="final"
                 initial={{ opacity: 0, scale: 0.8, rotate: -2 }}

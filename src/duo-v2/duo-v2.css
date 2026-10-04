@@ -1,0 +1,97 @@
+.dv2 {
+  --dv2-ink: #000;
+  --dv2-paper: #fff;
+  --dv2-mist: #efeff2;
+  --dv2-muted: #6b6b76;
+  --dv2-stage: #000;
+  --dv2-seam: rgba(255, 255, 255, 0.16);
+  --dv2-great: #22c55e;
+  --dv2-good: #facc15;
+  --dv2-fair: #fb923c;
+  --dv2-miss: #ef4444;
+  --dv2-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+}
+
+.dv2-display {
+  font-family: "Bricolage Grotesque", "Inter", ui-sans-serif, sans-serif;
+  font-optical-sizing: auto;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.04em;
+}
+
+.dv2-field {
+  transition: background-color 2.4s var(--dv2-ease);
+}
+
+.dv2-wordmark {
+  color: #fff;
+  mix-blend-mode: difference;
+}
+
+/* Phones: the copy below keeps its size, so the Duo hero fits its art to whatever height is left instead of cropping it. */
+@media (max-width: 39.99rem) {
+  .dv2-duo-hero, .dv2-duo-hero > .dv2-field { container-type: size; }
+  .dv2-duo-hero svg { width: min(20cqw, 70cqh); height: min(20cqw, 70cqh); }
+  .dv2-duo-hero .dv2-wordmark { font-size: clamp(56px, min(28cqw, calc(100cqh - 4.5rem)), 240px); }
+}
+@media (max-width: 39.99rem) and (min-height: 780px) and (orientation: portrait) {
+  .dv2-duo-hero svg { width: min(26cqw, 70cqh); height: min(26cqw, 70cqh); }
+}
+/* Shorter phones: two stacked strips are too thin, so split side by side with the shapes flanking the wordmark, clear of the mode pill. */
+@media (max-width: 39.99rem) and (max-height: 779.98px) {
+  .dv2-duo-hero { flex-direction: row; }
+  .dv2-duo-hero > .dv2-field, .dv2-duo-hero .dv2-wordmark { padding-top: 4.75rem; }
+  .dv2-duo-hero > .dv2-field:first-child { justify-items: start; padding-left: 5cqw; }
+  .dv2-duo-hero > .dv2-field:nth-child(2) { justify-items: end; padding-right: 5cqw; }
+  .dv2-duo-hero svg { width: min(34cqw, 75cqh); height: min(34cqw, 75cqh); }
+  .dv2-duo-hero .dv2-wordmark { font-size: clamp(48px, min(26cqw, calc(100cqh - 6rem)), 240px); }
+}
+
+.dv2-focus:focus-visible {
+  outline: 3px solid #2563eb;
+  outline-offset: 3px;
+}
+
+@keyframes dv2-float {
+  0%, 100% { transform: translateY(0) rotate(var(--r, 0deg)); }
+  50% { transform: translateY(-10px) rotate(calc(var(--r, 0deg) + 4deg)); }
+}
+.dv2-float { animation: dv2-float 6s ease-in-out infinite; }
+
+@keyframes dv2-pop {
+  0% { transform: scale(0.6); opacity: 0; }
+  60% { transform: scale(1.08); opacity: 1; }
+  100% { transform: scale(1); }
+}
+.dv2-pop { animation: dv2-pop 0.45s var(--dv2-ease) both; }
+
+@keyframes dv2-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-6px); }
+  40% { transform: translateX(5px); }
+  60% { transform: translateX(-3px); }
+  80% { transform: translateX(2px); }
+}
+.dv2-shake { animation: dv2-shake 0.4s ease-out both; }
+
+@keyframes dv2-burst {
+  0% { transform: translate(-50%, -50%) rotate(var(--a)) translateY(0) scale(1); opacity: 1; }
+  100% { transform: translate(-50%, -50%) rotate(var(--a)) translateY(-120px) scale(0.3); opacity: 0; }
+}
+.dv2-spark {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  animation: dv2-burst 0.8s var(--dv2-ease) forwards;
+  animation-delay: var(--d, 0s);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dv2-field { transition: none; }
+  .dv2-float, .dv2-pop, .dv2-shake, .dv2-spark { animation: none; }
+  .dv2-spark { display: none; }
+}

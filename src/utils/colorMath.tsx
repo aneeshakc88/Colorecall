@@ -184,7 +184,11 @@ export const HorizontalSlider = ({
   );
 };
 
-export const AnimatedScore =({ value, onComplete }: { value: number, onComplete?: () => void }) => {
+// `settle` (opt-in): tick as the shown whole number changes and finish the moment the shown digits read the final
+// value (once `minMs` has passed), instead of at the end of the ease where the rounded number has long since stopped.
+export type ScoreTiming = { delay?: number; duration?: number; minMs?: number; settle?: boolean };
+
+export const AnimatedScore =({ value, onComplete, decimals = 2, timing }: { value: number, onComplete?: () => void, decimals?: number, timing?: ScoreTiming }) => {
   const [displayValue, setDisplayValue] = useState(0);
   const lastTickTime = useRef(0);
   const onCompleteRef = useRef(onComplete);
@@ -195,21 +199,48 @@ export const AnimatedScore =({ value, onComplete }: { value: number, onComplete?
 
   useEffect(() => {
     let startTimestamp: number | null = null;
-    const duration = 1500;
+    const { delay = 0, duration = 1500, minMs = 0, settle = false } = timing ?? {};
     let animationFrameId: number;
+    let lastWhole = 0;
+    let lastShownWhole = 0;
+    const finalText = value.toFixed(decimals);
 
     const step = (timestamp: number) => {
-      if (!startTimestamp) startTimestamp = timestamp;
-      const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+      if (!startTimestamp) startTimestamp = timestamp + delay;
+      if (timestamp < startTimestamp) {
+        animationFrameId = window.requestAnimationFrame(step);
+        return;
+      }
+      const elapsed = timestamp - startTimestamp;
+      const progress = Math.min(elapsed / duration, 1);
       const easeProgress = 1 - Math.pow(1 - progress, 4);
-      setDisplayValue(easeProgress * value);
+      const shown = easeProgress * value;
+      setDisplayValue(shown);
 
-      if (timestamp - lastTickTime.current > 50 && progress < 1) {
-        audio.playScoreRollTick();
-        lastTickTime.current = timestamp;
+      let done = progress >= 1;
+      if (settle) {
+        const text = shown.toFixed(decimals);
+        const shownWhole = Math.floor(Number(text));
+        if (shownWhole !== lastShownWhole) {
+          if (timestamp - lastTickTime.current >= 35) {
+            audio.playScoreRollTick();
+            lastTickTime.current = timestamp;
+          }
+          lastShownWhole = shownWhole;
+        }
+        done ||= text === finalText && elapsed >= minMs;
+      } else {
+        // Tick only when the whole number visibly rolls over, so the clicks slow down with the count
+        // (a fixed-rate tick kept clicking long after the number had stopped moving, and even for a 0).
+        const whole = Math.floor(shown);
+        if (whole > lastWhole && timestamp - lastTickTime.current >= 35) {
+          audio.playScoreRollTick();
+          lastTickTime.current = timestamp;
+          lastWhole = whole;
+        }
       }
 
-      if (progress < 1) {
+      if (!done) {
         animationFrameId = window.requestAnimationFrame(step);
       } else {
         setDisplayValue(value);
@@ -221,5 +252,5 @@ export const AnimatedScore =({ value, onComplete }: { value: number, onComplete?
     return () => window.cancelAnimationFrame(animationFrameId);
   }, [value]);
 
-  return <>{displayValue.toFixed(2)}</>;
+  return <>{displayValue.toFixed(decimals)}</>;
 };

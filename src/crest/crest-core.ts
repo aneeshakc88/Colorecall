@@ -1,7 +1,8 @@
-import { CRESTS_DATA } from './crests-data';
+import { CRESTS_INDEX, ART_DIR } from './crests-index';
 import { makeWrongHex, seededRand } from '../flag/wrong-color';
 import { Color, hsbToRgb } from '../utils/colorMath';
 import { getCurrentCycle } from '../daily-cycle';
+import { loadSvg } from '../art-loader';
 
 export type CrestRound = {
   crest: { name: string; code: string; svg: string };
@@ -15,7 +16,7 @@ export const CREST_MAX_PER_ROUND = 25;
 
 // ── daily round set: 4 clubs a day, no club twice inside any 7-day window ──
 
-const CLUB_COUNT = CRESTS_DATA.length;
+const CLUB_COUNT = CRESTS_INDEX.length;
 const WEEK_SLOTS = CREST_ROUNDS * 7;
 // 104 clubs / 4 a day deals a whole pass in 26 days, so a club can only come
 // back after ~26 days — well past the one-week rule.
@@ -59,22 +60,74 @@ function deckForPass(pass: number): number[] {
   return deck;
 }
 
-export function getDailyCrestPuzzle(cycle: number = getCurrentCycle()): CrestRound[] {
+type CrestPick = Omit<CrestRound, 'crest'> & { name: string; code: string; url: string };
+
+export function getDailyCrestPicks(cycle: number = getCurrentCycle()): CrestPick[] {
   const day = Math.max(0, cycle - CREST_EPOCH_CYCLE);
   const deck = deckForPass(Math.floor(day / DAYS_PER_PASS));
   const slot = (day % DAYS_PER_PASS) * CREST_ROUNDS;
   const rand = seededRand(cycle * 31 + 9173);
 
   return Array.from({ length: CREST_ROUNDS }, (_, i) => {
-    const crest = CRESTS_DATA[deck[(slot + i) % deck.length]!]!;
+    const crest = CRESTS_INDEX[deck[(slot + i) % deck.length]!]!;
     const region = crest.hideable[Math.floor(rand() * crest.hideable.length)]!;
     return {
-      crest: { name: crest.name, code: crest.code, svg: crest.svg },
+      name: crest.name,
+      code: crest.code,
+      url: `${ART_DIR}/${crest.code}.svg?v=${crest.v}`,
       hiddenHex: region.hex,
       wrongHex: makeWrongHex(region.hex, rand),
       coverage: region.coverage,
     };
   });
+}
+
+// The day's 4 badges with their artwork. One promise per cycle, so components can `use()` it and
+// the home page can warm it up ahead of time.
+const puzzles = new Map<number, Promise<CrestRound[]>>();
+
+export function loadDailyCrestPuzzle(cycle: number = getCurrentCycle()): Promise<CrestRound[]> {
+  let p = puzzles.get(cycle);
+  if (!p) {
+    p = Promise.all(getDailyCrestPicks(cycle).map(async ({ name, code, url, ...round }) =>
+      ({ crest: { name, code, svg: await loadSvg(url) }, ...round })));
+    puzzles.set(cycle, p);
+  }
+  return p;
+}
+
+// Fixed badges for the intro screen, so it never shows today's answers. Any that happen to be in
+// today's set are dropped; the hero falls back to the next candidate.
+const SHOWCASE_HERO = ['DFB-dortmund', 'RFEF-barcelona', 'theFA-liverpool'];
+const SHOWCASE_RIBBON = ['theFA-arsenal', 'FIGC-juventus', 'FFF-marseille', 'DFB-bayern-munich', 'RFEF-real-betis', 'theFA-chelsea', 'FIGC-ac-milan', 'USSF-la-galaxy', 'FFF-monaco', 'RFEF-villarreal'];
+
+export type ShowcaseCrests = { hero: CrestRound; ribbon: string[] };
+const showcase = new Map<number, Promise<ShowcaseCrests>>();
+
+export function loadShowcaseCrests(cycle: number = getCurrentCycle()): Promise<ShowcaseCrests> {
+  let p = showcase.get(cycle);
+  if (!p) {
+    const today = new Set(getDailyCrestPicks(cycle).map(c => c.code));
+    const load = (code: string) => {
+      const c = CRESTS_INDEX.find(x => x.code === code)!;
+      return loadSvg(`${ART_DIR}/${c.code}.svg?v=${c.v}`).then(svg => ({ c, svg }));
+    };
+    const heroCode = SHOWCASE_HERO.find(c => !today.has(c))!;
+    p = Promise.all([load(heroCode), ...SHOWCASE_RIBBON.filter(c => !today.has(c)).map(load)]).then(([hero, ...ribbon]) => {
+      const region = hero!.c.hideable[0]!;
+      return {
+        hero: {
+          crest: { name: hero!.c.name, code: hero!.c.code, svg: hero!.svg },
+          hiddenHex: region.hex,
+          wrongHex: makeWrongHex(region.hex, seededRand(42)),
+          coverage: region.coverage,
+        },
+        ribbon: ribbon.map(r => r.svg),
+      };
+    });
+    showcase.set(cycle, p);
+  }
+  return p;
 }
 
 // ── colour conversions (hex <-> HSB, so the shared VerticalSlider drives a hex guess) ──

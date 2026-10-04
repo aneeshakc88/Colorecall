@@ -1,10 +1,10 @@
 // Split-hero flag intro — text left, one flag (with its wrong-colored band) right,
-// two rows of the day's flags drifting behind as a quiet ribbon. Mirrors mock "A"
-// from the flag-card direction deck, but built from the real daily puzzle instead
-// of CSS-drawn stand-ins.
-import { useMemo } from 'react';
+// two rows of flags drifting behind as a quiet ribbon. Uses a fixed showcase set,
+// never the daily puzzle, so the intro does not give away today's answers.
+import { use, useMemo } from 'react';
 import { Trophy } from 'lucide-react';
-import { getDailyFlagPuzzle } from './flag-core';
+import { loadShowcaseFlags } from './flag-core';
+import { cycleDateLabel, getCurrentCycle } from '../daily-cycle';
 import { swapRegion } from './flag-highlight';
 import { flagDataUri, flagAspect } from './flag-card';
 
@@ -15,16 +15,13 @@ type Props = {
   playedToday: boolean;
 };
 
-const dailyKicker = () => {
-  const d = new Date();
-  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  return `Daily · ${months[d.getUTCMonth()]} ${d.getUTCDate()}`;
-};
+// Same label as the share text and end screen: a daily runs 18h, so it is named after the day it started.
+const dailyKicker = () => `Daily · ${cycleDateLabel(getCurrentCycle())}`;
 
 // Desktop: absolute drifting band across the whole card, top/bottom edges.
 // Mobile: same drift, but a normal in-flow row (className override) so it
 // can't overlap the copy the way an absolute-positioned band did.
-const Ribbon = ({ flags, reverse, duration, className }: { flags: string[]; reverse?: boolean; duration: number; className?: string }) => (
+export const Ribbon = ({ flags, reverse, duration, className }: { flags: string[]; reverse?: boolean; duration: number; className?: string }) => (
   <div
     className={className ?? 'hidden lg:flex absolute left-0 right-0 gap-3 sm:gap-4 opacity-25'}
     style={{ maskImage: 'linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent)', WebkitMaskImage: 'linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent)' }}
@@ -45,19 +42,17 @@ const Ribbon = ({ flags, reverse, duration, className }: { flags: string[]; reve
 );
 
 export const FlagSplitHero = ({ onPlay, onLeaderboard, playersToday, playedToday }: Props) => {
-  const rounds = useMemo(() => getDailyFlagPuzzle(), []);
-  // Qatar's serrated band reads badly at hero size, so keep it to the game itself
-  const heroRound = rounds.find(r => r.flag.name !== 'Qatar') ?? rounds[0]!;
+  const { hero: heroRound, ribbon } = use(loadShowcaseFlags());
 
   const heroUri = useMemo(
     () => flagDataUri(swapRegion(heroRound.flag.svg, heroRound.hiddenHex, heroRound.wrongHex, heroRound.hiddenIdx)),
     [heroRound],
   );
   const heroAr = flagAspect(heroRound.flag.svg);
-  const ribbonUris = useMemo(() => rounds.filter(r => r.flag.name !== 'Qatar').map(r => flagDataUri(r.flag.svg)), [rounds]);
+  const ribbonUris = useMemo(() => ribbon.map(flagDataUri), [ribbon]);
 
   return (
-    <div className="relative flex flex-col lg:flex-row w-full h-full items-center justify-between lg:justify-center gap-1 lg:gap-10 overflow-hidden py-[clamp(0.25rem,2vh,1.5rem)] lg:py-14">
+    <div className="relative flex flex-col lg:flex-row w-full h-full items-center justify-between lg:justify-center gap-1 lg:gap-10 overflow-x-hidden overflow-y-auto lg:overflow-hidden pt-12 pb-[clamp(0.25rem,2vh,1.5rem)] lg:py-14">
       <style>{`
         @keyframes fi-drift { to { transform: translateX(-50%); } }
         @keyframes fi-heroglint { 0% { transform: translateX(-140%) skewX(-14deg); } 55%, 100% { transform: translateX(340%) skewX(-14deg); } }
@@ -65,10 +60,10 @@ export const FlagSplitHero = ({ onPlay, onLeaderboard, playersToday, playedToday
       `}</style>
 
       {/* Bands sit in the vertical padding the content is inset by (lg:py-14), so they never run through the copy */}
-      <div className="absolute inset-x-0 top-0 h-10">
+      <div className="hidden lg:block absolute inset-x-0 top-0 h-10">
         <Ribbon flags={ribbonUris} duration={40} />
       </div>
-      <div className="absolute inset-x-0 bottom-0 h-10">
+      <div className="hidden lg:block absolute inset-x-0 bottom-0 h-10">
         <Ribbon flags={ribbonUris} reverse duration={52} />
       </div>
 
