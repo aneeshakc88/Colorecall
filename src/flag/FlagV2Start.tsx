@@ -1,14 +1,14 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, type ReactNode } from 'react';
 import { motion } from 'motion/react';
 import { ArrowRight, CalendarDays, Trophy } from 'lucide-react';
-import { BOX } from '../duo-v2/DuoV2';
+import { BOX, FooterSpot } from '../duo-v2/DuoV2';
 import { audio } from '../utils/audio';
 import { cycleDateLabel, getCurrentCycle } from '../daily-cycle';
 
 const FlagHero = lazy(() => import('./FlagV2Art').then(m => ({ default: m.FlagHero })));
 const FlagRibbon = lazy(() => import('./FlagV2Art').then(m => ({ default: m.FlagRibbon })));
 
-type Props = { key?: string; playedToday: boolean; playersToday: number; onPlay: () => void; onLeaderboard: () => void };
+type Props = { key?: string; footer: ReactNode; playedToday: boolean; playersToday: number; onPlay: () => void; onLeaderboard: () => void };
 
 // Placeholders hold the art's space so nothing jumps when the flags land.
 const ribbonGap = <div className="h-[clamp(1.35rem,4.5vh,2.5rem)]" />;
@@ -16,7 +16,7 @@ const heroGap = <div className="w-[clamp(170px,52vw,240px)] tall:w-[min(68vw,300
 
 // The original split hero (drifting flag ribbons, tilted flag with its wrong band) in Duo v2's type and buttons.
 // Copy and buttons render with the page; only the flag art waits on its chunk and SVGs.
-export function FlagV2Start({ playedToday, playersToday, onPlay, onLeaderboard }: Props) {
+export function FlagV2Start({ footer, playedToday, playersToday, onPlay, onLeaderboard }: Props) {
   return (
     <motion.div
       key="flag-v2-start"
@@ -76,6 +76,7 @@ export function FlagV2Start({ playedToday, playersToday, onPlay, onLeaderboard }
             </button>
           </div>
         </div>
+        <FooterSpot>{footer}</FooterSpot>
       </div>
     </motion.div>
   );

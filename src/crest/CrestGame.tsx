@@ -95,7 +95,7 @@ function CrestImg({ svg, hiddenHex, swapHex, height, reserve = 0 }: { svg: strin
   const ratio = viewBoxRatio(svg);
   if (!height) {
     return (
-      <div className="relative shrink-0 grid place-items-center" style={{ width: `min(100cqw, calc((100cqh - ${reserve}rem) * ${ratio.toFixed(3)}), 420px)`, aspectRatio: String(ratio), maxWidth: '100%' }}>
+      <div className="relative shrink-0 grid place-items-center" style={{ width: `min(100cqw, calc((100cqh - var(--crest-reserve, ${reserve}rem)) * ${ratio.toFixed(3)}), 420px)`, aspectRatio: String(ratio), maxWidth: '100%' }}>
         <div className="cv2-spot cv2-ring absolute -inset-[30%] pointer-events-none" aria-hidden />
         <div className="cv2-badge relative w-full h-full [&>svg]:block [&>svg]:h-full [&>svg]:w-full" dangerouslySetInnerHTML={{ __html: out }} />
       </div>
@@ -117,7 +117,7 @@ function CrestImg({ svg, hiddenHex, swapHex, height, reserve = 0 }: { svg: strin
 const CARD_BASE = "w-full h-full fixed inset-0 lg:relative lg:w-[90vw] lg:max-w-[750px] bg-black backdrop-blur-2xl overflow-hidden pointer-events-auto border border-white/10";
 const CARD_PLAY = `${CARD_BASE} lg:h-[65vh] lg:min-h-[450px] lg:max-h-[550px] flex flex-col shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] lg:rounded-[2.5rem]`;
 const CARD_V2 = `dv2 ${BOX} z-40 flex flex-col wide:flex-row bg-black text-white lg:outline lg:-outline-offset-1 lg:outline-white/10`;
-const STAGE = 'relative flex-1 min-h-0 flex flex-col items-center gap-3 px-5 pt-6 pb-3 wide:px-8 wide:pb-6';
+const STAGE = 'relative flex-1 min-h-0 flex flex-col items-center gap-3 short:gap-2 px-5 pt-6 short:pt-4 pb-3 wide:px-8 wide:pb-6';
 const PANEL = 'relative wide:w-[44cqw] wide:max-w-[360px] shrink-0 flex flex-col gap-3 px-5 pb-5 wide:pb-6 pt-3 wide:pt-6 wide:px-7 bg-[#031a0e]/55 backdrop-blur-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] wide:shadow-[inset_1px_0_0_rgba(255,255,255,0.1)]';
 const CARD_FINAL = `${CARD_BASE} lg:h-auto lg:min-h-[450px] flex flex-col items-center justify-center shadow-[0_32px_64px_-16px_rgba(0,0,0,0.3)] lg:rounded-[2.5rem] py-12 px-6 md:px-12`;
 
@@ -274,8 +274,8 @@ export default function CrestGame({ hasPlayedToday: _hasPlayedToday, onPlayedTod
         <CrestBackdrop svg={swapRegion(round.crest.svg, round.hiddenHex, colorToHex(backdropColor))} />
         <div className={STAGE}>
           <CrestProgress svgs={rounds.map(r => r.crest.svg)} current={currentRound} scores={roundResults.map(r => r.score)} />
-          <div className="relative flex-1 min-h-0 w-full [container-type:size] grid content-center justify-items-center gap-5">
-            <h2 className="dv2-display text-lg wide:text-2xl font-bold text-center text-balance text-white/60">
+          <div className="relative flex-1 min-h-0 w-full [container-type:size] grid content-center justify-items-center gap-5 short:gap-2.5 short:[--crest-reserve:3rem]">
+            <h2 className="dv2-display text-lg wide:text-2xl short:text-[15px] font-bold text-center text-balance text-white/60">
               Fix the wrong color in <span className="text-white">{round.crest.name}</span>
             </h2>
             <CrestImg svg={round.crest.svg} hiddenHex={round.hiddenHex} swapHex={colorToHex(color)} reserve={5} />
@@ -309,8 +309,8 @@ export default function CrestGame({ hasPlayedToday: _hasPlayedToday, onPlayedTod
         <CrestBackdrop svg={round.crest.svg} />
         <div className={STAGE}>
           <CrestProgress svgs={rounds.map(r => r.crest.svg)} current={currentRound} scores={roundResults.map(r => r.score)} />
-          <div className="relative flex-1 min-h-0 w-full [container-type:size] grid content-center justify-items-center gap-5">
-            <h2 className="dv2-display text-lg wide:text-2xl font-bold text-center text-white">{lastResult.crestName}</h2>
+          <div className="relative flex-1 min-h-0 w-full [container-type:size] grid content-center justify-items-center gap-5 short:gap-2.5 short:[--crest-reserve:4.5rem]">
+            <h2 className="dv2-display text-lg wide:text-2xl short:text-[15px] font-bold text-center text-white">{lastResult.crestName}</h2>
             <CrestReveal svg={round.crest.svg} hiddenHex={round.hiddenHex} guessHex={lastResult.guessHex} perfect={lastResult.score >= 24} fire={countDone} reserve={6.5} />
             <p className="fv2-late text-white/45 text-[13px] font-semibold">Hold the badge to see your guess</p>
           </div>

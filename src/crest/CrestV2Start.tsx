@@ -1,7 +1,7 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, type ReactNode } from 'react';
 import { motion } from 'motion/react';
 import { ArrowRight, CalendarDays, Trophy } from 'lucide-react';
-import { BOX } from '../duo-v2/DuoV2';
+import { BOX, FooterSpot } from '../duo-v2/DuoV2';
 import { audio } from '../utils/audio';
 import { cycleDateLabel, getCurrentCycle } from '../daily-cycle';
 
@@ -9,7 +9,7 @@ const CrestHeroBackdrop = lazy(() => import('./CrestV2Art').then(m => ({ default
 const CrestHero = lazy(() => import('./CrestV2Art').then(m => ({ default: m.CrestHero })));
 const CrestRibbon = lazy(() => import('./CrestV2Art').then(m => ({ default: m.CrestRibbon })));
 
-type Props = { key?: string; playedToday: boolean; playersToday: number; onPlay: () => void; onLeaderboard: () => void };
+type Props = { key?: string; footer: ReactNode; playedToday: boolean; playersToday: number; onPlay: () => void; onLeaderboard: () => void };
 
 // Placeholders hold the art's space so nothing jumps when the badges land.
 const ribbonGap = <div className="h-[clamp(1.5rem,5vh,2.5rem)]" />;
@@ -17,7 +17,7 @@ const heroGap = <div className="w-[clamp(140px,40vw,200px)] tall:w-[min(52vw,240
 
 // The original pitch hero (floodlights, drifting badge ribbons, tilted badge in its wrong colour) in Duo v2's type and buttons.
 // Fixed showcase badges, never the day's picks. Copy and buttons render with the page; only the badge art waits.
-export function CrestV2Start({ playedToday, playersToday, onPlay, onLeaderboard }: Props) {
+export function CrestV2Start({ footer, playedToday, playersToday, onPlay, onLeaderboard }: Props) {
   return (
     <motion.div
       key="crest-v2-start"
@@ -75,6 +75,7 @@ export function CrestV2Start({ playedToday, playersToday, onPlay, onLeaderboard 
             </button>
           </div>
         </div>
+        <FooterSpot>{footer}</FooterSpot>
       </div>
     </motion.div>
   );

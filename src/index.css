@@ -15,6 +15,13 @@
   }
 }
 
+/* Short portrait phones (iPhone SE, mini, in-app browsers): the art gets the space, the copy steps down. */
+@custom-variant short {
+  @media (max-width: 39.99rem) and (max-height: 639.98px) and (orientation: portrait) {
+    @slot;
+  }
+}
+
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-serif: "Inter", serif;

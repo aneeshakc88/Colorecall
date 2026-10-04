@@ -29,6 +29,25 @@
   mix-blend-mode: difference;
 }
 
+/* Phones: the copy below keeps its size, so the Duo hero fits its art to whatever height is left instead of cropping it. */
+@media (max-width: 39.99rem) {
+  .dv2-duo-hero, .dv2-duo-hero > .dv2-field { container-type: size; }
+  .dv2-duo-hero svg { width: min(20cqw, 70cqh); height: min(20cqw, 70cqh); }
+  .dv2-duo-hero .dv2-wordmark { font-size: clamp(56px, min(28cqw, calc(100cqh - 4.5rem)), 240px); }
+}
+@media (max-width: 39.99rem) and (min-height: 780px) and (orientation: portrait) {
+  .dv2-duo-hero svg { width: min(26cqw, 70cqh); height: min(26cqw, 70cqh); }
+}
+/* Shorter phones: two stacked strips are too thin, so split side by side with the shapes flanking the wordmark, clear of the mode pill. */
+@media (max-width: 39.99rem) and (max-height: 779.98px) {
+  .dv2-duo-hero { flex-direction: row; }
+  .dv2-duo-hero > .dv2-field, .dv2-duo-hero .dv2-wordmark { padding-top: 4.75rem; }
+  .dv2-duo-hero > .dv2-field:first-child { justify-items: start; padding-left: 5cqw; }
+  .dv2-duo-hero > .dv2-field:nth-child(2) { justify-items: end; padding-right: 5cqw; }
+  .dv2-duo-hero svg { width: min(34cqw, 75cqh); height: min(34cqw, 75cqh); }
+  .dv2-duo-hero .dv2-wordmark { font-size: clamp(48px, min(26cqw, calc(100cqh - 6rem)), 240px); }
+}
+
 .dv2-focus:focus-visible {
   outline: 3px solid #2563eb;
   outline-offset: 3px;

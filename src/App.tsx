@@ -1264,6 +1264,30 @@ export default function App() {
   const anyV2 = v2 || cv2;
   // Flag v2's card is full-screen below lg, so the header and footer step aside like Duo v2's.
   const flagV2Game = (FLAG_V2 && showFlagGame) || (CREST_V2 && showCrestGame);
+  // v2 start cards carry the footer inside them on phones, so a card that scrolls never slides its buttons under it.
+  const v2Start = !showScoreboard && (gameEdition === 'duo' ? DUO_V2 : gameEdition === 'classic' ? CLASSIC_V2 : gameEdition === 'flag' ? FLAG_V2 : CREST_V2);
+  const footerLinks = (
+    <>
+      <DisplayNameButton name={displayName} onClick={() => { audio.playClick(); setShowNameModal(true); }} className="sm:hidden font-bold text-zinc-500" />
+      <Link to="/terms" className="hover:text-zinc-900 transition-colors">Terms<span className="max-[374px]:hidden"> of Service</span></Link>
+      <Link to="/privacy" className="hover:text-zinc-900 transition-colors">Privacy<span className="max-[374px]:hidden"> Policy</span></Link>
+      <button
+        onClick={toggleSound}
+        className="hover:text-zinc-900 transition-colors flex items-center cursor-pointer ml-1"
+        aria-label={soundEnabled ? "Mute" : "Unmute"}
+      >
+         {soundEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
+      </button>
+      <button
+        onClick={() => { audio.playClick(); setShowHowToPlay(true); }}
+        className="hover:text-zinc-900 transition-colors flex items-center cursor-pointer"
+        aria-label="How to play"
+        aria-controls="how-to-play"
+      >
+        <CircleHelp size={14} />
+      </button>
+    </>
+  );
   const startClassicDaily = () => {
     audio.playClick();
     trackButtonClick('Daily');
@@ -1347,25 +1371,8 @@ export default function App() {
       <DisplayNameModal open={showNameModal} name={displayName} suggested={guestName} onClose={closeNameModal} onSave={renameMyScores} />
 
       {/* Footer Links */}
-      <div className={`fixed bottom-3 left-0 w-full justify-center lg:bottom-6 lg:left-6 lg:w-auto lg:justify-start z-50 ${(gameState === 'start' && !showScoreboard && !flagV2Game) ? 'flex' : 'hidden lg:flex'} items-center gap-4 max-[374px]:gap-3 whitespace-nowrap text-[10px] sm:text-xs font-medium text-zinc-400`}>
-        <DisplayNameButton name={displayName} onClick={() => { audio.playClick(); setShowNameModal(true); }} className="sm:hidden font-bold text-zinc-500" />
-        <Link to="/terms" className="hover:text-zinc-900 transition-colors">Terms<span className="max-[374px]:hidden"> of Service</span></Link>
-        <Link to="/privacy" className="hover:text-zinc-900 transition-colors">Privacy<span className="max-[374px]:hidden"> Policy</span></Link>
-        <button 
-          onClick={toggleSound} 
-          className="hover:text-zinc-900 transition-colors flex items-center cursor-pointer ml-1" 
-          aria-label={soundEnabled ? "Mute" : "Unmute"}
-        >
-           {soundEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
-        </button>
-        <button
-          onClick={() => { audio.playClick(); setShowHowToPlay(true); }}
-          className="hover:text-zinc-900 transition-colors flex items-center cursor-pointer"
-          aria-label="How to play"
-          aria-controls="how-to-play"
-        >
-          <CircleHelp size={14} />
-        </button>
+      <div className={`fixed bottom-3 left-0 w-full justify-center lg:bottom-6 lg:left-6 lg:w-auto lg:justify-start z-50 ${(gameState === 'start' && !showScoreboard && !flagV2Game) ? (v2Start ? 'hidden sm:flex' : 'flex') : 'hidden lg:flex'} items-center gap-4 max-[374px]:gap-3 whitespace-nowrap text-[10px] sm:text-xs font-medium text-zinc-400`}>
+        {footerLinks}
       </div>
       <HowToPlay edition={gameEdition} open={showHowToPlay} onClose={closeHowToPlay} />
 
@@ -1419,6 +1426,7 @@ export default function App() {
                     {gameEdition === 'duo' && v2Home ? (
                       <DuoV2Start
                         key="duo-v2-start"
+                        footer={footerLinks}
                         hasPlayedToday={hasPlayedDuoToday}
                         onDaily={startDuoDaily}
                         onQuickPlay={() => {
@@ -1575,6 +1583,7 @@ export default function App() {
                     ) : gameEdition === 'classic' && cv2Home ? (
                       <ClassicV2Start
                         key="classic-v2-start"
+                        footer={footerLinks}
                         hasPlayedToday={hasPlayedToday}
                         onDaily={startClassicDaily}
                         onQuickPlay={() => {
@@ -1728,6 +1737,7 @@ export default function App() {
                     ) : gameEdition === 'crest' && CREST_V2 && !showScoreboard ? (
                       <CrestV2Start
                         key="crest-v2-start"
+                        footer={footerLinks}
                         playersToday={colorSportTotalPlayers}
                         playedToday={hasPlayedColorSportToday}
                         onLeaderboard={() => { audio.playClick(); trackButtonClick('Score'); setShowScoreboard(true); }}
@@ -1878,6 +1888,7 @@ export default function App() {
                     ) : FLAG_V2 && !showScoreboard ? (
                       <FlagV2Start
                         key="flag-v2-start"
+                        footer={footerLinks}
                         playersToday={flagTotalPlayers}
                         playedToday={hasPlayedFlagToday}
                         onLeaderboard={() => { audio.playClick(); trackButtonClick('Score'); setShowScoreboard(true); }}

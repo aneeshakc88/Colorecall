@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { Color, hsbToString } from '../utils/colorMath';
 import { audio } from '../utils/audio';
-import { BOX, HOME_SHAPES, ModeButtons, RoundTag, reducedMotion } from '../duo-v2/DuoV2';
+import { BOX, FooterSpot, HOME_SHAPES, ModeButtons, RoundTag, reducedMotion } from '../duo-v2/DuoV2';
 import '../duo-v2/duo-v2.css';
 
 // No @types/react in this repo, so `key` must be declared for AnimatePresence children.
@@ -13,8 +13,8 @@ type K = { key?: string };
 // Mid-to-deep hues only, so the white cut-out shape and wordmark always read.
 const PALETTE = ['#ff5a36', '#2f5bff', '#00a37a', '#7a3cff', '#e8407f', '#0f8fd6', '#c2185b', '#f06a00'];
 
-export function ClassicV2Start({ hasPlayedToday, onDaily, onQuickPlay, onScore }: K & {
-  hasPlayedToday: boolean; onDaily: () => void; onQuickPlay: () => void; onScore: () => void;
+export function ClassicV2Start({ footer, hasPlayedToday, onDaily, onQuickPlay, onScore }: K & {
+  footer: React.ReactNode; hasPlayedToday: boolean; onDaily: () => void; onQuickPlay: () => void; onScore: () => void;
 }) {
   const [step, setStep] = useState(0);
   useEffect(() => {
@@ -69,6 +69,7 @@ export function ClassicV2Start({ hasPlayedToday, onDaily, onQuickPlay, onScore }
           </div>
           <ModeButtons tone="light" hasPlayedToday={hasPlayedToday} onDaily={onDaily} onQuickPlay={onQuickPlay} onScore={onScore} />
         </div>
+        <FooterSpot>{footer}</FooterSpot>
       </section>
     </motion.div>
   );

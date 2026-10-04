@@ -25,6 +25,13 @@ export const BOX = 'fixed inset-0 lg:relative lg:w-[90vw] lg:max-w-[810px] lg:h-
 export const ACTION = 'dv2-focus h-14 wide:h-16 rounded-[20px] dv2-display text-xl font-bold flex items-center justify-center gap-2 active:scale-[0.97] transition-[transform,background-color]';
 export const ACTION_SPOT = 'absolute left-5 right-5 bottom-5 wide:left-auto wide:right-7 wide:bottom-6 wide:w-[calc(min(44cqw,360px)-3.5rem)]';
 
+// Phone footer: sits in the start card's bottom padding, where the fixed footer used to float.
+export const FooterSpot = ({ children }: { children: React.ReactNode }) => (
+  <div className="sm:hidden absolute inset-x-0 bottom-3 flex justify-center items-center gap-4 max-[374px]:gap-3 whitespace-nowrap text-[10px] font-medium text-zinc-400">
+    {children}
+  </div>
+);
+
 export const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 export const RoundTag = ({ round }: { round: number }) => (
@@ -116,8 +123,8 @@ export const HOME_SHAPES = [
   <path key="p" d="M50 4 L61 38 L96 38 L68 59 L79 94 L50 72 L21 94 L32 59 L4 38 L39 38 Z" />,
 ];
 
-export function DuoV2Start({ hasPlayedToday, onDaily, onQuickPlay, onScore }: K & {
-  hasPlayedToday: boolean; onDaily: () => void; onQuickPlay: () => void; onScore: () => void;
+export function DuoV2Start({ footer, hasPlayedToday, onDaily, onQuickPlay, onScore }: K & {
+  footer: React.ReactNode; hasPlayedToday: boolean; onDaily: () => void; onQuickPlay: () => void; onScore: () => void;
 }) {
   const [pair, setPair] = useState(0);
   useEffect(() => {
@@ -138,7 +145,7 @@ export function DuoV2Start({ hasPlayedToday, onDaily, onQuickPlay, onScore }: K 
       transition={{ duration: 0.4 }}
       className={`dv2 ${BOX} overflow-y-auto! flex flex-col bg-black text-white lg:outline lg:-outline-offset-1 lg:outline-white/10`}
     >
-      <div className="relative flex-1 min-h-[150px] sm:min-h-[180px] flex flex-col sm:flex-row overflow-hidden">
+      <div className="dv2-duo-hero relative flex-1 min-h-[150px] sm:min-h-[180px] flex flex-col sm:flex-row overflow-hidden">
         <motion.div
           className="dv2-field relative flex-1 grid place-items-center pt-14 lg:pt-0"
           style={{ backgroundColor: a }}
@@ -182,6 +189,7 @@ export function DuoV2Start({ hasPlayedToday, onDaily, onQuickPlay, onScore }: K 
 
           <ModeButtons tone="dark" hasPlayedToday={hasPlayedToday} onDaily={onDaily} onQuickPlay={onQuickPlay} onScore={onScore} />
         </div>
+        <FooterSpot>{footer}</FooterSpot>
       </section>
     </motion.div>
   );

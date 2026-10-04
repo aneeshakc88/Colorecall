@@ -52,7 +52,7 @@ export function CrestReveal({ svg, hiddenHex, guessHex, perfect, fire, reserve =
       onKeyUp={hold(false)}
       onContextMenu={(e) => e.preventDefault()}
       className={`cv2-badge relative block select-none touch-none ${perfect && fire ? 'is-perfect' : ''}`}
-      style={{ width: `min(100cqw, calc((100cqh - ${reserve}rem) * ${ratio.toFixed(3)}), 420px)`, aspectRatio: String(ratio) }}
+      style={{ width: `min(100cqw, calc((100cqh - var(--crest-reserve, ${reserve}rem)) * ${ratio.toFixed(3)}), 420px)`, aspectRatio: String(ratio) }}
     >
       <div className="cv2-layer" dangerouslySetInnerHTML={{ __html: guessSvg }} />
       <div className="cv2-layer fv2-true" style={{ visibility: peek ? 'hidden' : 'visible' }} dangerouslySetInnerHTML={{ __html: svg }} />
