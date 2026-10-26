@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { ArrowLeftRight, ArrowRight, CalendarDays, Share2, Trophy, User, X, RotateCcw, Zap } from 'lucide-react';
 import { Color, hsbToRgb, hsbToString, HorizontalSlider, AnimatedScore } from '../utils/colorMath';
 import { audio } from '../utils/audio';
+import { PaintJar } from '../components/PaintJar';
 import './duo-v2.css';
 
 type Shape = { Icon: React.ElementType; color: Color };
@@ -520,6 +521,8 @@ export function DuoV2Final(p: K & {
                 </button>
               )}
             </div>
+
+            <PaintJar colors={p.rounds.map(r => hsbToString(r.user.color))} source={p.label} />
 
             <button
               onClick={p.crossSell.onClick}
