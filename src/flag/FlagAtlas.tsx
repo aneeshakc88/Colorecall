@@ -2,6 +2,7 @@ import { motion } from 'motion/react';
 import { Share2, User, X } from 'lucide-react';
 import { AnimatedScore } from '../utils/colorMath';
 import { audio } from '../utils/audio';
+import { PaintJar } from '../components/PaintJar';
 import { FlagBackdrop } from './flag-v2-parts';
 import './flag-v2.css';
 
@@ -107,6 +108,8 @@ export function FlagAtlas({ items, backdropSvg, total, quip, dateLabel, countdow
             >
               <Share2 size={20} /> {copied ? 'Copied' : 'Share score'}
             </button>
+
+            <PaintJar colors={items.map(i => i.guessHex)} source="flag_final" />
 
             <button
               onClick={onReturnHome}

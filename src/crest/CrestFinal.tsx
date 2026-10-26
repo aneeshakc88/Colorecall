@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { Share2, X } from 'lucide-react';
 import { AnimatedScore } from '../utils/colorMath';
 import { audio } from '../utils/audio';
+import { PaintJar } from '../components/PaintJar';
 import { swapRegion } from '../flag/flag-highlight';
 import { CrestBackdrop } from './crest-v2-parts';
 import { crestDataUri } from './CrestSplitHero';
@@ -92,6 +93,8 @@ export function CrestFinal({ items, total, max, quip, dateLabel, countdown, copi
             >
               <Share2 size={20} /> {copied ? 'Copied' : 'Share score'}
             </button>
+
+            <PaintJar colors={items.map(i => i.guessHex)} source="crest_final" />
 
             <button
               onClick={onReturnHome}

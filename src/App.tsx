@@ -37,7 +37,8 @@ const loadIcons = (indices: number[]) => Promise.all(indices.map(loadIcon));
 const FaTimes = (props: IconBaseProps) => GenIcon({"tag":"svg","attr":{"viewBox":"0 0 352 512"},"child":[{"tag":"path","attr":{"d":"M242.72 256l100.07-100.07c12.28-12.28 12.28-32.19 0-44.48l-22.24-22.24c-12.28-12.28-32.19-12.28-44.48 0L176 189.28 75.93 89.21c-12.28-12.28-32.19-12.28-44.48 0L9.21 111.45c-12.28 12.28-12.28 32.19 0 44.48L109.28 256 9.21 356.07c-12.28 12.28-12.28 32.19 0 44.48l22.24 22.24c12.28 12.28 32.2 12.28 44.48 0L176 322.72l100.07 100.07c12.28 12.28 32.2 12.28 44.48 0l22.24-22.24c12.28-12.28 12.28-32.19 0-44.48L242.72 256z"},"child":[]}]})(props);
 
 const MEDAL_HEX =['#fbbf24', '#cbd5e1', '#f0a868'];
-import { initGA, trackPageView, trackButtonClick, trackGameStart, trackGameEnd } from './analytics';
+import { initGA, trackPageView, trackButtonClick, trackGameStart, trackGameEnd, trackEvent } from './analytics';
+import { KOFI_URL } from './components/PaintJar';
 import { collection, addDoc, query, orderBy, getDocs, serverTimestamp, where, Timestamp, updateDoc, doc, limit, getCountFromServer } from 'firebase/firestore';
 import Leaderboard, { BoardData, BoardRow, MyStats } from './components/Leaderboard';
 import { signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, User as FirebaseUser } from 'firebase/auth';
@@ -1269,8 +1270,18 @@ export default function App() {
   const footerLinks = (
     <>
       <DisplayNameButton name={displayName} onClick={() => { audio.playClick(); setShowNameModal(true); }} className="sm:hidden font-bold text-zinc-500" />
-      <Link to="/terms" className="hover:text-zinc-900 transition-colors">Terms<span className="max-[374px]:hidden"> of Service</span></Link>
-      <Link to="/privacy" className="hover:text-zinc-900 transition-colors">Privacy<span className="max-[374px]:hidden"> Policy</span></Link>
+      <Link to="/terms" className="hover:text-zinc-900 transition-colors">Terms<span className="max-sm:hidden"> of Service</span></Link>
+      <Link to="/privacy" className="hover:text-zinc-900 transition-colors">Privacy<span className="max-sm:hidden"> Policy</span></Link>
+      <a
+        href={KOFI_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={() => trackEvent('Support', 'kofi_click', 'footer')}
+        className="hover:text-zinc-900 transition-colors flex items-center gap-1.5"
+      >
+        <span aria-hidden className="w-2.5 h-2.5 rounded-full" style={{ background: 'conic-gradient(#ef4444, #f59e0b, #22c55e, #3b82f6, #a855f7, #ef4444)' }} />
+        Tip jar
+      </a>
       <button
         onClick={toggleSound}
         className="hover:text-zinc-900 transition-colors flex items-center cursor-pointer ml-1"
